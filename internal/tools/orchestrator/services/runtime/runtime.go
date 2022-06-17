@@ -41,6 +41,7 @@ import (
 	"github.com/erda-project/erda/internal/pkg/diceworkspace"
 	"github.com/erda-project/erda/internal/pkg/gitflowutil"
 	"github.com/erda-project/erda/internal/pkg/user"
+	patypes "github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler/types"
 	"github.com/erda-project/erda/internal/tools/orchestrator/dbclient"
 	"github.com/erda-project/erda/internal/tools/orchestrator/events"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/impl/clusterinfo"
@@ -1256,9 +1257,21 @@ func (r *Runtime) Destroy(runtimeID uint64) error {
 		if req.Force {
 			forceDelete = "true"
 		}
-		if err := r.serviceGroupImpl.Delete(req.Namespace, req.Name, forceDelete); err != nil {
+		delObjects, err := r.AppliedScaledObjects(uniqueID)
+		if err != nil {
+			logrus.Warnf("[alert] failed delete group, error in get runtime hpa rules: %v, (%v)",
+				runtime.ScheduleName, err)
+		}
+		if err := r.serviceGroupImpl.Delete(req.Namespace, req.Name, forceDelete, delObjects); err != nil {
 			// TODO: we should return err if delete failed (even if err is group not exist?)
 			logrus.Errorf("[alert] failed delete group in scheduler: %v, (%v)",
+				runtime.ScheduleName, err)
+			return err
+		}
+
+		// delete runtime hpa rule
+		if err := r.deleteRuntimeHPA(uniqueID); err != nil {
+			logrus.Errorf("[alert] failed delete group, error in delete runtime hpa rules: %v, (%v)",
 				runtime.ScheduleName, err)
 			return err
 		}
@@ -2216,4 +2229,34 @@ func IsDeploying(status apistructs.DeploymentStatus) bool {
 	default:
 		return false
 	}
+}
+
+// get keda scaledobjects in k8s
+func (r *Runtime) AppliedScaledObjects(uniqueID spec.RuntimeUniqueId) (map[string]string, error) {
+	rules, err := r.db.GetRuntimeHPAByServices(uniqueID, nil)
+	if err != nil {
+		return nil, errors.Errorf("get runtime hpa rules by RuntimeUniqueId %#v failed: %v", uniqueID, err)
+	}
+	scaledRules := make(map[string]string)
+	for _, rule := range rules {
+		// only applied rules need to delete
+		if rule.IsApplied == patypes.RuntimeHPARuleApplied {
+			scaledRules[rule.ServiceName] = rule.Rules
+		}
+	}
+	return scaledRules, nil
+}
+
+func (r *Runtime) deleteRuntimeHPA(uniqueID spec.RuntimeUniqueId) error {
+	rules, err := r.db.GetRuntimeHPAByServices(uniqueID, nil)
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		// only applied rules need to delete
+		if err = r.db.DeleteRuntimeHPAByRuleId(rule.RuleID); err != nil {
+			return errors.Errorf("delete runtime hpa rule by rule_id %s failed: %v", rule.RuleID, err)
+		}
+	}
+	return nil
 }

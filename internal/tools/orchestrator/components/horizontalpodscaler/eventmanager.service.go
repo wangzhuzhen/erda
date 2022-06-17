@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package components
+package horizontalpodscaler
 
-import (
-	_ "github.com/erda-project/erda/internal/tools/orchestrator/components/addon/mysql"
-	_ "github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler"
-	_ "github.com/erda-project/erda/internal/tools/orchestrator/components/runtime"
-)
+import "github.com/erda-project/erda/internal/tools/orchestrator/events"
+
+type EventManagerService interface {
+	EmitEvent(e *events.RuntimeEvent)
+}

@@ -12,10 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package components
+package orchestrator
 
 import (
-	_ "github.com/erda-project/erda/internal/tools/orchestrator/components/addon/mysql"
-	_ "github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler"
-	_ "github.com/erda-project/erda/internal/tools/orchestrator/components/runtime"
+	"github.com/erda-project/erda/internal/tools/openapi/legacy/api/apis"
 )
+
+var ORCHESTRATOR_RUNTIME_HPA_RULE_UPDATE = apis.ApiSpec{
+	Path:        "/api/runtimes/autoscaler/hpa-update",
+	BackendPath: "/api/runtimes/autoscaler/hpa-update",
+	Host:        "orchestrator.marathon.l4lb.thisdcos.directory:8081",
+	Scheme:      "http",
+	Method:      "PUT",
+	CheckLogin:  true,
+	//CheckToken:   true,
+	//RequestType:  apistructs.RuntimeInspectRequest{},
+	//ResponseType: apistructs.RuntimeInspectResponse{},
+	Doc:       `更新 Runtime 的 Service 的 HPA 规则`,
+	IsOpenAPI: true,
+}
