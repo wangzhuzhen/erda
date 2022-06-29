@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package horizontalpodscaler
+package instanceinfo
 
-import "github.com/erda-project/erda/internal/tools/orchestrator/events"
+import (
+	"github.com/erda-project/erda/internal/tools/orchestrator/dbclient"
+)
 
-type EventManagerService interface {
-	EmitEvent(e *events.RuntimeEvent)
+func (c *Client) CreateHPAEventInfo(hpaEvent dbclient.HPAEventInfo) error {
+	if err := c.db.Save(&hpaEvent).Error; err != nil {
+		return err
+	}
+	return nil
 }

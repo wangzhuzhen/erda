@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2021 Terminus, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 CREATE TABLE `ps_v2_runtime_hpa`
 (
     `id`                  bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -27,3 +43,17 @@ CREATE TABLE `ps_v2_runtime_hpa`
     `is_applied`          varchar(1)   NOT NULL DEFAULT 'N' COMMENT '规则是否已使用',
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='Runtime HPA信息';
+
+/*
+CREATE TABLE `ps_v2_runtime_hpa_events`
+(
+    `id`                  bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+    `created_at`          datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at`          datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    `rule_id`             varchar(36)  NOT NULL COMMENT '规则 ID',
+    `runtime_id`          bigint(20) unsigned NOT NULL COMMENT 'Runtime ID',
+    `service_name`        varchar(255) DEFAULT NULL COMMENT 'HPA 规则关联的服务名称',
+    `event`               text COMMENT 'hpa event 摘要 json 缓存',
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='Runtime HPA Event 信息';
+*/

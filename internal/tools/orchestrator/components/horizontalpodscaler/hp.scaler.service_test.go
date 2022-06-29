@@ -32,7 +32,6 @@ import (
 	"github.com/erda-project/erda/internal/pkg/user"
 	patypes "github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler/types"
 	"github.com/erda-project/erda/internal/tools/orchestrator/dbclient"
-	"github.com/erda-project/erda/internal/tools/orchestrator/events"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/impl/servicegroup"
 	"github.com/erda-project/erda/internal/tools/orchestrator/spec"
 	"github.com/erda-project/erda/pkg/database/dbengine"
@@ -42,7 +41,6 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 	type fields struct {
 		bundle           BundleService
 		db               DBService
-		evMgr            EventManagerService
 		serviceGroupImpl servicegroup.ServiceGroup
 	}
 
@@ -51,6 +49,7 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 		req *pb.HPARuleCreateRequest
 	}
 
+	tTime := time.Now()
 	services := make([]*pb.RuntimeServiceHPAConfig, 0)
 	metadata := make(map[string]string)
 	metadata["type"] = "Utilization"
@@ -60,6 +59,29 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 		Type:     "memory",
 		Metadata: metadata,
 	})
+
+	services01 := make([]*pb.RuntimeServiceHPAConfig, 0)
+	metadata01 := make(map[string]string)
+	metadata01["type"] = "Utilization"
+	metadata01["value"] = "200"
+	triggers01 := make([]*pb.ScaleTriggers, 0)
+	triggers01 = append(triggers01, &pb.ScaleTriggers{
+		Type:     "memory",
+		Metadata: metadata01,
+	})
+
+	services02 := make([]*pb.RuntimeServiceHPAConfig, 0)
+	metadata02 := make(map[string]string)
+	metadata02["timezone"] = "Asia/Shanghai"
+	metadata02["start"] = "10 * * * *"
+	metadata02["end"] = "50 * * * *"
+	metadata02["desiredReplicas"] = "10"
+	triggers02 := make([]*pb.ScaleTriggers, 0)
+	triggers02 = append(triggers02, &pb.ScaleTriggers{
+		Type:     "cron",
+		Metadata: metadata02,
+	})
+
 	services = append(services, &pb.RuntimeServiceHPAConfig{
 		RuleName: "test01",
 		Deployments: &pb.Deployments{
@@ -79,6 +101,44 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 			Triggers: triggers,
 		},
 	})
+	services01 = append(services01, &pb.RuntimeServiceHPAConfig{
+		RuleName: "test01",
+		Deployments: &pb.Deployments{
+			Replicas: 1,
+		},
+		Resources: &pb.Resources{
+			Cpu:  0.1,
+			Mem:  128,
+			Disk: 0,
+		},
+		ScaledConfig: &pb.ScaledConfig{
+			MaxReplicaCount: 3,
+			MinReplicaCount: 1,
+			Advanced: &pb.HPAAdvanced{
+				RestoreToOriginalReplicaCount: true,
+			},
+			Triggers: triggers01,
+		},
+	})
+	services02 = append(services02, &pb.RuntimeServiceHPAConfig{
+		RuleName: "test01",
+		Deployments: &pb.Deployments{
+			Replicas: 1,
+		},
+		Resources: &pb.Resources{
+			Cpu:  0.1,
+			Mem:  128,
+			Disk: 0,
+		},
+		ScaledConfig: &pb.ScaledConfig{
+			MaxReplicaCount: 3,
+			MinReplicaCount: 1,
+			Advanced: &pb.HPAAdvanced{
+				RestoreToOriginalReplicaCount: true,
+			},
+			Triggers: triggers02,
+		},
+	})
 
 	tests := []struct {
 		name    string
@@ -92,24 +152,54 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 			fields: fields{
 				bundle:           &bundle.Bundle{},
 				db:               &dbServiceImpl{},
-				evMgr:            &events.EventManager{},
 				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
 			},
 			args: args{
 				ctx: context.Background(),
 				req: &pb.HPARuleCreateRequest{
-					RuntimeInfo: &pb.RuntimeInfo{
-						RuntimeID: 1,
-					},
-					Services: services,
+					RuntimeID: 1,
+					Services:  services,
 					// TODO: setup fields
 				},
 			},
-			want: &pb.HPACommonResponse{
-				Success: true,
-				Errors:  nil,
-			},
+			want:    nil,
 			wantErr: false,
+		},
+		{
+			name: "Test_02",
+			fields: fields{
+				bundle:           &bundle.Bundle{},
+				db:               &dbServiceImpl{},
+				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
+			},
+			args: args{
+				ctx: context.Background(),
+				req: &pb.HPARuleCreateRequest{
+					RuntimeID: 1,
+					Services:  services01,
+					// TODO: setup fields
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Test_03",
+			fields: fields{
+				bundle:           &bundle.Bundle{},
+				db:               &dbServiceImpl{},
+				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
+			},
+			args: args{
+				ctx: context.Background(),
+				req: &pb.HPARuleCreateRequest{
+					RuntimeID: 1,
+					Services:  services02,
+					// TODO: setup fields
+				},
+			},
+			want:    nil,
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -117,7 +207,6 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 			s := &hpscalerService{
 				bundle:           tt.fields.bundle,
 				db:               tt.fields.db,
-				evMgr:            tt.fields.evMgr,
 				serviceGroupImpl: tt.fields.serviceGroupImpl,
 			}
 
@@ -184,10 +273,11 @@ func Test_hpscalerService_CreateRuntimeHPARules(t *testing.T) {
 					return nil
 				})
 
-			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.evMgr), "EmitEvent",
-				func(_ *events.EventManager, e *events.RuntimeEvent) {
-					return
+			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPARuleByRuleId",
+				func(_ *dbServiceImpl, ruleId string) (dbclient.RuntimeHPA, error) {
+					return generateRuntimeHPA(tTime), nil
 				})
+
 			defer m8.Unpatch()
 			defer m7.Unpatch()
 			defer m6.Unpatch()
@@ -214,7 +304,6 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 	type fields struct {
 		bundle           BundleService
 		db               DBService
-		evMgr            EventManagerService
 		serviceGroupImpl servicegroup.ServiceGroup
 	}
 	type args struct {
@@ -234,7 +323,7 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 	tTime := time.Now()
 	rules := make([]*pb.ErdaRuntimeHPARule, 0)
 	rules = append(rules, &pb.ErdaRuntimeHPARule{
-		Id:          "1779dff5-184c-4dfe-9c76-978ac5126e59",
+		RuleID:      "1779dff5-184c-4dfe-9c76-978ac5126e59",
 		CreateAt:    timestamppb.New(tTime),
 		UpdateAt:    timestamppb.New(tTime),
 		ServiceName: "service01",
@@ -269,7 +358,7 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 		name    string
 		fields  fields
 		args    args
-		want    *pb.HPARulesLisResponse
+		want    *pb.ErdaRuntimeHPARules
 		wantErr bool
 	}{
 		{
@@ -277,7 +366,6 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 			fields: fields{
 				bundle:           &bundle.Bundle{},
 				db:               &dbServiceImpl{},
-				evMgr:            &events.EventManager{},
 				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
 			},
 			args: args{
@@ -286,25 +374,9 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 					RuntimeId: "1",
 				},
 			},
-			want: &pb.HPARulesLisResponse{
-				Success: true,
-				RuntimeRules: &pb.ErdaRuntimeHPARules{
-					RuntimeInfo: &pb.RuntimeInfo{
-						OrgID:           1,
-						OrgName:         "test",
-						ProjectID:       1,
-						ProjectName:     "test",
-						ApplicationID:   1,
-						ApplicationName: "test",
-						Workspace:       "PROD",
-						RuntimeID:       1,
-						RuntimeName:     "master",
-						ClusterName:     "test",
-						ClusterType:     "k8s",
-					},
-					Rules: rules,
-				},
-				Errors: nil,
+			want: &pb.ErdaRuntimeHPARules{
+				RuntimeID: 1,
+				Rules:     rules,
 			},
 			wantErr: false,
 		},
@@ -314,7 +386,6 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 			s := &hpscalerService{
 				bundle:           tt.fields.bundle,
 				db:               tt.fields.db,
-				evMgr:            tt.fields.evMgr,
 				serviceGroupImpl: tt.fields.serviceGroupImpl,
 			}
 
@@ -334,7 +405,7 @@ func Test_hpscalerService_ListRuntimeHPARules(t *testing.T) {
 						Access: true,
 					}, nil
 				})
-			m4 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaHRuntimePARulesByServices",
+			m4 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPARulesByServices",
 				func(_ *dbServiceImpl, id spec.RuntimeUniqueId, services []string) ([]dbclient.RuntimeHPA, error) {
 					rules := make([]dbclient.RuntimeHPA, 0)
 					rules = append(rules, generateRuntimeHPA(tTime))
@@ -367,7 +438,6 @@ func Test_hpscalerService_DeleteHPARulesByIds(t *testing.T) {
 	type fields struct {
 		bundle           BundleService
 		db               DBService
-		evMgr            EventManagerService
 		serviceGroupImpl servicegroup.ServiceGroup
 	}
 	type args struct {
@@ -389,22 +459,16 @@ func Test_hpscalerService_DeleteHPARulesByIds(t *testing.T) {
 			fields: fields{
 				bundle:           &bundle.Bundle{},
 				db:               &dbServiceImpl{},
-				evMgr:            &events.EventManager{},
 				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
 			},
 			args: args{
 				ctx: context.Background(),
 				req: &pb.DeleteRuntimeHPARulesRequest{
-					RuntimeInfo: &pb.RuntimeInfo{
-						RuntimeID: 1,
-					},
+					RuntimeID: 1,
 					//Rules:       nil,
 				},
 			},
-			want: &pb.HPACommonResponse{
-				Success: true,
-				Errors:  nil,
-			},
+			want:    nil,
 			wantErr: false,
 		},
 	}
@@ -413,7 +477,6 @@ func Test_hpscalerService_DeleteHPARulesByIds(t *testing.T) {
 			s := &hpscalerService{
 				bundle:           tt.fields.bundle,
 				db:               tt.fields.db,
-				evMgr:            tt.fields.evMgr,
 				serviceGroupImpl: tt.fields.serviceGroupImpl,
 			}
 
@@ -434,29 +497,27 @@ func Test_hpscalerService_DeleteHPARulesByIds(t *testing.T) {
 					}, nil
 				})
 
-			m4 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaHRuntimePARulesByRuntimeId",
+			m4 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPARulesByRuntimeId",
 				func(_ *dbServiceImpl, runtimeID uint64) ([]dbclient.RuntimeHPA, error) {
 					rules := make([]dbclient.RuntimeHPA, 0)
 					rules = append(rules, generateRuntimeHPA(tTime))
 					return rules, nil
 				})
 
-			m5 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaHRuntimePARuleByRuleId",
+			m5 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPARuleByRuleId",
 				func(_ *dbServiceImpl, ruleId string) (dbclient.RuntimeHPA, error) {
 					return generateRuntimeHPA(tTime), nil
 				})
-
-			m6 := monkey.PatchInstanceMethod(reflect.TypeOf(s.evMgr), "EmitEvent",
-				func(_ *events.EventManager, e *events.RuntimeEvent) {
-					return
-				})
-
-			m7 := monkey.PatchInstanceMethod(reflect.TypeOf(s.serviceGroupImpl), "Scale",
+			m6 := monkey.PatchInstanceMethod(reflect.TypeOf(s.serviceGroupImpl), "Scale",
 				func(_ *servicegroup.ServiceGroupImpl, sg *apistructs.ServiceGroup) (interface{}, error) {
 					return nil, nil
 				})
 
-			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "DeleteErdaHRuntimePARulesByRuleId",
+			m7 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "DeleteErdaRuntimeHPARulesByRuleId",
+				func(_ *dbServiceImpl, ruleId string) error {
+					return nil
+				})
+			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "DeleteErdaRuntimeHPAEventsByRuleId",
 				func(_ *dbServiceImpl, ruleId string) error {
 					return nil
 				})
@@ -486,7 +547,6 @@ func Test_hpscalerService_UpdateRuntimeHPARules(t *testing.T) {
 	type fields struct {
 		bundle           BundleService
 		db               DBService
-		evMgr            EventManagerService
 		serviceGroupImpl servicegroup.ServiceGroup
 	}
 	type args struct {
@@ -505,7 +565,7 @@ func Test_hpscalerService_UpdateRuntimeHPARules(t *testing.T) {
 	})
 	updateRules := make([]*pb.ErdaRuntimeHPARule, 0)
 	updateRules = append(updateRules, &pb.ErdaRuntimeHPARule{
-		Id:       "1779dff5-184c-4dfe-9c76-978ac5126e59",
+		RuleID:   "1779dff5-184c-4dfe-9c76-978ac5126e59",
 		CreateAt: timestamppb.New(tTime),
 		UpdateAt: timestamppb.New(tTime),
 		UserInfo: &pb.UserInfo{
@@ -540,22 +600,16 @@ func Test_hpscalerService_UpdateRuntimeHPARules(t *testing.T) {
 			fields: fields{
 				bundle:           &bundle.Bundle{},
 				db:               &dbServiceImpl{},
-				evMgr:            &events.EventManager{},
 				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
 			},
 			args: args{
 				ctx: context.Background(),
 				req: &pb.ErdaRuntimeHPARules{
-					RuntimeInfo: &pb.RuntimeInfo{
-						RuntimeID: 1,
-					},
-					Rules: updateRules,
+					RuntimeID: 1,
+					Rules:     updateRules,
 				},
 			},
-			want: &pb.HPACommonResponse{
-				Success: true,
-				Errors:  nil,
-			},
+			want:    nil,
 			wantErr: false,
 		},
 	}
@@ -564,7 +618,6 @@ func Test_hpscalerService_UpdateRuntimeHPARules(t *testing.T) {
 			s := &hpscalerService{
 				bundle:           tt.fields.bundle,
 				db:               tt.fields.db,
-				evMgr:            tt.fields.evMgr,
 				serviceGroupImpl: tt.fields.serviceGroupImpl,
 			}
 
@@ -593,26 +646,21 @@ func Test_hpscalerService_UpdateRuntimeHPARules(t *testing.T) {
 						Nick: "nick",
 					}, nil
 				})
-			m5 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaHRuntimePARuleByRuleId",
+			m5 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPARuleByRuleId",
 				func(_ *dbServiceImpl, ruleId string) (dbclient.RuntimeHPA, error) {
 					return generateRuntimeHPA(tTime), nil
 				})
 
-			m6 := monkey.PatchInstanceMethod(reflect.TypeOf(s.evMgr), "EmitEvent",
-				func(_ *events.EventManager, e *events.RuntimeEvent) {
-					return
-				})
-
-			m7 := monkey.PatchInstanceMethod(reflect.TypeOf(s.serviceGroupImpl), "Scale",
+			m6 := monkey.PatchInstanceMethod(reflect.TypeOf(s.serviceGroupImpl), "Scale",
 				func(_ *servicegroup.ServiceGroupImpl, sg *apistructs.ServiceGroup) (interface{}, error) {
 					return nil, nil
 				})
 
-			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "UpdateErdaHPARule",
+			m7 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "UpdateErdaHPARule",
 				func(_ *dbServiceImpl, req *dbclient.RuntimeHPA) error {
 					return nil
 				})
-			m9 := monkey.PatchInstanceMethod(reflect.TypeOf(s.bundle), "GetApp",
+			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.bundle), "GetApp",
 				func(_ *bundle.Bundle, id uint64) (*apistructs.ApplicationDTO, error) {
 					return &apistructs.ApplicationDTO{
 						ID:                 1,
@@ -626,7 +674,6 @@ func Test_hpscalerService_UpdateRuntimeHPARules(t *testing.T) {
 						ProjectDisplayName: "test",
 					}, nil
 				})
-			defer m9.Unpatch()
 			defer m8.Unpatch()
 			defer m7.Unpatch()
 			defer m6.Unpatch()
@@ -652,7 +699,6 @@ func Test_hpscalerService_ApplyOrCancelHPARulesByIds(t *testing.T) {
 	type fields struct {
 		bundle           BundleService
 		db               DBService
-		evMgr            EventManagerService
 		serviceGroupImpl servicegroup.ServiceGroup
 	}
 	type args struct {
@@ -683,22 +729,16 @@ func Test_hpscalerService_ApplyOrCancelHPARulesByIds(t *testing.T) {
 			fields: fields{
 				bundle:           &bundle.Bundle{},
 				db:               &dbServiceImpl{},
-				evMgr:            &events.EventManager{},
 				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
 			},
 			args: args{
 				ctx: context.Background(),
 				req: &pb.ApplyOrCancelHPARulesRequest{
-					RuntimeInfo: &pb.RuntimeInfo{
-						RuntimeID: 1,
-					},
+					RuntimeID:  1,
 					RuleAction: actions1,
 				},
 			},
-			want: &pb.HPACommonResponse{
-				Success: true,
-				Errors:  nil,
-			},
+			want:    nil,
 			wantErr: false,
 		},
 		{
@@ -706,22 +746,16 @@ func Test_hpscalerService_ApplyOrCancelHPARulesByIds(t *testing.T) {
 			fields: fields{
 				bundle:           &bundle.Bundle{},
 				db:               &dbServiceImpl{},
-				evMgr:            &events.EventManager{},
 				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
 			},
 			args: args{
 				ctx: context.Background(),
 				req: &pb.ApplyOrCancelHPARulesRequest{
-					RuntimeInfo: &pb.RuntimeInfo{
-						RuntimeID: 1,
-					},
+					RuntimeID:  1,
 					RuleAction: actions2,
 				},
 			},
-			want: &pb.HPACommonResponse{
-				Success: true,
-				Errors:  nil,
-			},
+			want:    nil,
 			wantErr: false,
 		},
 	}
@@ -730,7 +764,6 @@ func Test_hpscalerService_ApplyOrCancelHPARulesByIds(t *testing.T) {
 			s := &hpscalerService{
 				bundle:           tt.fields.bundle,
 				db:               tt.fields.db,
-				evMgr:            tt.fields.evMgr,
 				serviceGroupImpl: tt.fields.serviceGroupImpl,
 			}
 
@@ -759,7 +792,8 @@ func Test_hpscalerService_ApplyOrCancelHPARulesByIds(t *testing.T) {
 						Nick: "nick",
 					}, nil
 				})
-			m5 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaHRuntimePARuleByRuleId",
+
+			m5 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPARuleByRuleId",
 				func(_ *dbServiceImpl, ruleId string) (dbclient.RuntimeHPA, error) {
 					rule := generateRuntimeHPA(tTime)
 					if tt.name == "Test_01" {
@@ -768,22 +802,16 @@ func Test_hpscalerService_ApplyOrCancelHPARulesByIds(t *testing.T) {
 					return rule, nil
 				})
 
-			m6 := monkey.PatchInstanceMethod(reflect.TypeOf(s.evMgr), "EmitEvent",
-				func(_ *events.EventManager, e *events.RuntimeEvent) {
-					return
-				})
-
-			m7 := monkey.PatchInstanceMethod(reflect.TypeOf(s.serviceGroupImpl), "Scale",
+			m6 := monkey.PatchInstanceMethod(reflect.TypeOf(s.serviceGroupImpl), "Scale",
 				func(_ *servicegroup.ServiceGroupImpl, sg *apistructs.ServiceGroup) (interface{}, error) {
 					return nil, nil
 				})
 
-			m8 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "UpdateErdaHPARule",
+			m7 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "UpdateErdaHPARule",
 				func(_ *dbServiceImpl, req *dbclient.RuntimeHPA) error {
 					return nil
 				})
 
-			defer m8.Unpatch()
 			defer m7.Unpatch()
 			defer m6.Unpatch()
 			defer m5.Unpatch()
@@ -872,5 +900,234 @@ func generateRuntime() *dbclient.Runtime {
 		GitRepoAbbrev:       "",
 		OrgID:               1,
 		ExtraParams:         "",
+	}
+}
+
+func generatePreDeployment(tTime time.Time) *dbclient.PreDeployment {
+	return &dbclient.PreDeployment{
+		BaseModel: dbengine.BaseModel{
+			ID:        1,
+			CreatedAt: tTime,
+			UpdatedAt: tTime,
+		},
+		ApplicationId: 1,
+		Workspace:     "PROD",
+		RuntimeName:   "master",
+		Dice:          "{\"version\":\"2.0\",\"meta\":null,\"services\":{\"test\":{\"image\":\"addon-registry.default.svc.cluster.local:5000/erda-go-demo/go-web:go-demo-1645517335127632461\",\"image_username\":\"\",\"image_password\":\"\",\"cmd\":\"\",\"ports\":[{\"port\":8080,\"expose\":true}],\"resources\":{\"cpu\":0.1,\"mem\":128,\"max_cpu\":0,\"max_mem\":0,\"disk\":0,\"network\":{\"mode\":\"container\"}},\"deployments\":{\"replicas\":1,\"policies\":\"\"},\"health_check\":{\"http\":{},\"exec\":{}},\"traffic_security\":{}}}}",
+		DiceOverlay:   "",
+		DiceType:      1,
+	}
+}
+
+func Test_hpscalerService_GetRuntimeBaseInfo(t *testing.T) {
+	type fields struct {
+		bundle           BundleService
+		db               DBService
+		serviceGroupImpl servicegroup.ServiceGroup
+	}
+	type args struct {
+		ctx context.Context
+		req *pb.ListRequest
+	}
+	tTime := time.Now()
+	bis := make([]*pb.ServiceBaseInfo, 0)
+	bis = append(bis, &pb.ServiceBaseInfo{
+		ServiceName: "test",
+		Deployments: &pb.Deployments{
+			Replicas: 1,
+		},
+		Resources: &pb.Resources{
+			Cpu:  0.1,
+			Mem:  128,
+			Disk: 0,
+		},
+	})
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    *pb.RuntimeServiceBaseInfos
+		wantErr bool
+	}{
+		// TODO: Add test cases.
+		{
+			name: "Test_01",
+			fields: fields{
+				bundle:           &bundle.Bundle{},
+				db:               &dbServiceImpl{},
+				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
+			},
+			args: args{
+				ctx: context.Background(),
+				req: &pb.ListRequest{
+					RuntimeId: "1",
+					Services:  "test",
+				},
+			},
+			want: &pb.RuntimeServiceBaseInfos{
+				RuntimeID:        1,
+				ServiceBaseInfos: bis,
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &hpscalerService{
+				bundle:           tt.fields.bundle,
+				db:               tt.fields.db,
+				serviceGroupImpl: tt.fields.serviceGroupImpl,
+			}
+
+			m1 := monkey.PatchInstanceMethod(reflect.TypeOf(s), "GetUserAndOrgID",
+				func(_ *hpscalerService, ctx context.Context) (userID user.ID, orgID uint64, err error) {
+					return user.ID("1"), 1, nil
+				})
+
+			m2 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetRuntime",
+				func(_ *dbServiceImpl, id uint64) (*dbclient.Runtime, error) {
+					return generateRuntime(), nil
+				})
+
+			m3 := monkey.PatchInstanceMethod(reflect.TypeOf(s.bundle), "CheckPermission",
+				func(_ *bundle.Bundle, req *apistructs.PermissionCheckRequest) (*apistructs.PermissionCheckResponseData, error) {
+					return &apistructs.PermissionCheckResponseData{
+						Access: true,
+					}, nil
+				})
+
+			m4 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetPreDeployment",
+				func(_ *dbServiceImpl, uniqueId spec.RuntimeUniqueId) (*dbclient.PreDeployment, error) {
+					return generatePreDeployment(tTime), nil
+				})
+
+			defer m4.Unpatch()
+			defer m3.Unpatch()
+			defer m2.Unpatch()
+			defer m1.Unpatch()
+
+			got, err := s.GetRuntimeBaseInfo(tt.args.ctx, tt.args.req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetRuntimeBaseInfo() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetRuntimeBaseInfo() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generateRuntimeHPAEvents(tTime time.Time) []dbclient.HPAEventInfo {
+	events := make([]dbclient.HPAEventInfo, 0)
+	events = append(events, dbclient.HPAEventInfo{
+		BaseModel: dbengine.BaseModel{
+			ID:        1,
+			CreatedAt: tTime,
+			UpdatedAt: tTime,
+		},
+		RuleID:      "1779dff5-184c-4dfe-9c76-978ac5126e59",
+		RuntimeID:   0,
+		ServiceName: "test",
+		Event:       "{\"lastTimestamp\":\"2022-06-27T05:56:53Z\",\"type\":\"Normal\",\"reason\":\"SuccessfulRescale\",\"message\":\"New size: 3; reason: memory resource utilization (percentage of request) above target\"}",
+	})
+	return events
+}
+
+func Test_hpscalerService_ListRuntimeHPAEvents(t *testing.T) {
+	type fields struct {
+		bundle           BundleService
+		db               DBService
+		serviceGroupImpl servicegroup.ServiceGroup
+	}
+	type args struct {
+		ctx context.Context
+		req *pb.ListRequest
+	}
+
+	tTime := time.Now()
+	timestamppb.New(tTime).AsTime()
+	events := make([]*pb.ErdaRuntimeHPAEvent, 0)
+	events = append(events, &pb.ErdaRuntimeHPAEvent{
+		ServiceName: "test",
+		RuleId:      "1779dff5-184c-4dfe-9c76-978ac5126e59",
+		Event: &pb.HPAEventDetail{
+			CreateAt:     timestamppb.New(tTime),
+			Type:         "Normal",
+			Reason:       "SuccessfulRescale",
+			EventMessage: "New size: 3; reason: memory resource utilization (percentage of request) above target",
+		},
+	})
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    *pb.ErdaRuntimeHPAEvents
+		wantErr bool
+	}{
+		// TODO: Add test cases.
+		{
+			name: "Test_01",
+			fields: fields{
+				bundle:           &bundle.Bundle{},
+				db:               &dbServiceImpl{},
+				serviceGroupImpl: &servicegroup.ServiceGroupImpl{},
+			},
+			args: args{
+				ctx: context.Background(),
+				req: &pb.ListRequest{
+					RuntimeId: "1",
+					Services:  "test",
+				},
+			},
+			want:    &pb.ErdaRuntimeHPAEvents{Events: events},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &hpscalerService{
+				bundle:           tt.fields.bundle,
+				db:               tt.fields.db,
+				serviceGroupImpl: tt.fields.serviceGroupImpl,
+			}
+
+			m1 := monkey.PatchInstanceMethod(reflect.TypeOf(s), "GetUserAndOrgID",
+				func(_ *hpscalerService, ctx context.Context) (userID user.ID, orgID uint64, err error) {
+					return user.ID("1"), 1, nil
+				})
+
+			m2 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetRuntime",
+				func(_ *dbServiceImpl, id uint64) (*dbclient.Runtime, error) {
+					return generateRuntime(), nil
+				})
+
+			m3 := monkey.PatchInstanceMethod(reflect.TypeOf(s.bundle), "CheckPermission",
+				func(_ *bundle.Bundle, req *apistructs.PermissionCheckRequest) (*apistructs.PermissionCheckResponseData, error) {
+					return &apistructs.PermissionCheckResponseData{
+						Access: true,
+					}, nil
+				})
+			m4 := monkey.PatchInstanceMethod(reflect.TypeOf(s.db), "GetErdaRuntimeHPAEventsByServices",
+				func(_ *dbServiceImpl, runtimeId uint64, services []string) ([]dbclient.HPAEventInfo, error) {
+					return generateRuntimeHPAEvents(tTime), nil
+				})
+
+			defer m4.Unpatch()
+			defer m3.Unpatch()
+			defer m2.Unpatch()
+			defer m1.Unpatch()
+
+			got, err := s.ListRuntimeHPAEvents(tt.args.ctx, tt.args.req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ListRuntimeHPAEvents() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ListRuntimeHPAEvents() got = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

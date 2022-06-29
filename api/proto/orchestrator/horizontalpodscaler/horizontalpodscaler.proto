@@ -15,7 +15,7 @@ service HPScalerService {
       body: "*"
     };
   }
-  rpc ListRuntimeHPARules (ListRequest) returns (HPARulesLisResponse) {
+  rpc ListRuntimeHPARules (ListRequest) returns (ErdaRuntimeHPARules) {
     option (google.api.http) = {
       get: "/api/runtimes/autoscaler/hpa-get?runtimeId={runtimeId}&services={services}"
       body: "*"
@@ -40,13 +40,21 @@ service HPScalerService {
       body: "*"
     };
   }
-  rpc GetRuntimeBaseInfo (ListRequest) returns (RuntimeServiceBaseInfoListResponse) {
+  rpc GetRuntimeBaseInfo (ListRequest) returns (RuntimeServiceBaseInfos) {
     option (google.api.http) = {
       // action = apply/cancel
       get: "/api/runtimes/baseInfo/{runtimeId}"
       body: "*"
     };
   }
+
+  rpc ListRuntimeHPAEvents (ListRequest) returns (ErdaRuntimeHPAEvents) {
+    option (google.api.http) = {
+      get: "/api/runtimes/autoscaler/hpa-event-get?runtimeId={runtimeId}&services={services}"
+      body: "*"
+    };
+  }
+
   /*
   rpc HPScaleManual (ManualHPRequest) returns (HPManualResponse) {
     option (google.api.http) = {
@@ -64,16 +72,11 @@ service HPScalerService {
 }
 
 message RuntimeServiceBaseInfos {
-  RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
+  uint64 runtimeID = 1 [json_name = "runtimeId"] ;
+  //RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
   repeated ServiceBaseInfo serviceBaseInfos = 2 [json_name = "serviceBaseInfos"] ;
 }
 
-message RuntimeServiceBaseInfoListResponse {
-  bool success = 1 [json_name = "success"] ;
-  RuntimeServiceBaseInfos runtimeServices = 2 [json_name = "runtimeServices"] ;
-  repeated ErrorResponse errors = 3 [json_name = "errors"] ;
-
-}
 
 message ServiceBaseInfo {
   string serviceName = 1 [json_name = "serviceName"] ;
@@ -82,9 +85,8 @@ message ServiceBaseInfo {
 }
 
 message HPARuleCreateRequest {
-  RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
-  UserInfo userInfo = 2 [json_name = "userInfo"] ;
-  repeated RuntimeServiceHPAConfig services = 3 [json_name = "services"] ;
+  uint64 runtimeID = 1 [json_name = "runtimeId"] ;
+  repeated RuntimeServiceHPAConfig services = 2 [json_name = "services"] ;
 }
 
 message ListRequest {
@@ -95,22 +97,19 @@ message ListRequest {
   //repeated string serviceNames = 3 [json_name = "services"] ;
 }
 
-message HPARulesLisResponse {
-  bool success = 1 [json_name = "success"] ;
-  ErdaRuntimeHPARules runtimeRules = 2 [json_name = "runtimeRules"] ;
-  repeated ErrorResponse errors = 3 [json_name = "errors"] ;
-}
 
 message DeleteRuntimeHPARulesRequest {
-  RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
-  UserInfo userInfo = 2 [json_name = "userInfo"] ;
-  repeated string rules = 3 [json_name = "rules"] ;
+  uint64 runtimeID = 1 [json_name = "runtimeId"] ;
+  //RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
+  //UserInfo userInfo = 2 [json_name = "userInfo"] ;
+  repeated string rules = 2 [json_name = "rules"] ;
 }
 
 message ApplyOrCancelHPARulesRequest {
-  RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
-  UserInfo userInfo = 2 [json_name = "userInfo"] ;
-  repeated RuleAction ruleAction = 3 [json_name = "actions"] ;
+  uint64 runtimeID = 1 [json_name = "runtimeId"] ;
+  //RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
+  //UserInfo userInfo = 2 [json_name = "userInfo"] ;
+  repeated RuleAction ruleAction = 2 [json_name = "actions"] ;
 }
 
 message RuleAction {
@@ -119,8 +118,6 @@ message RuleAction {
 }
 
 message HPACommonResponse {
-  bool success = 1 [json_name = "success"] ;
-  repeated ErrorResponse errors = 2 [json_name = "errors"] ;
 }
 
 message ErrorResponse {
@@ -190,15 +187,20 @@ message ScaleTriggers {
 
 message ScaledConfig {
   string ruleName = 1 [json_name = "ruleName"] ;
-  string ruleNameSpace = 2 [json_name = "ruleNameSpace"] ;
-  ScaleTargetRef scaleTargetRef = 3 [json_name = "scaleTargetRef"] ;
-  int32  pollingInterval = 4 [json_name = "pollingInterval"] ;
-  int32  cooldownPeriod = 5 [json_name = "cooldownPeriod"] ;
-  int32  minReplicaCount = 6 [json_name = "minReplicaCount"] ;
-  int32  maxReplicaCount = 7 [json_name = "maxReplicaCount"] ;
-  HPAAdvanced advanced = 8 [json_name = "advanced"] ;
-  repeated ScaleTriggers triggers = 9 [json_name = "triggers"] ;
-  FallBack fallback = 10 [json_name = "fallback"] ;
+  string ruleID = 2 [json_name = "ruleId"] ;
+  uint64 runtimeID = 3 [json_name = "runtimeId"] ;
+  uint64 applicationID = 4 [json_name = "applicationId"] ;
+  uint64 orgID = 5 [json_name = "orgId"] ;
+  string serviceName = 6 [json_name = "serviceName"] ;
+  string ruleNameSpace = 7 [json_name = "ruleNameSpace"] ;
+  ScaleTargetRef scaleTargetRef = 8 [json_name = "scaleTargetRef"] ;
+  int32  pollingInterval = 9 [json_name = "pollingInterval"] ;
+  int32  cooldownPeriod = 10 [json_name = "cooldownPeriod"] ;
+  int32  minReplicaCount = 11 [json_name = "minReplicaCount"] ;
+  int32  maxReplicaCount = 12 [json_name = "maxReplicaCount"] ;
+  HPAAdvanced advanced = 13 [json_name = "advanced"] ;
+  repeated ScaleTriggers triggers = 14 [json_name = "triggers"] ;
+  FallBack fallback = 15 [json_name = "fallback"] ;
 }
 
 message RuntimeServiceHPAConfig {
@@ -212,12 +214,13 @@ message RuntimeServiceHPAConfig {
 }
 
 message ErdaRuntimeHPARules {
-  RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
+  //RuntimeInfo runtimeInfo = 1 [json_name = "runtimeInfo"] ;
+  uint64 runtimeID = 1 [json_name = "runtimeId"] ;
   repeated ErdaRuntimeHPARule rules = 2 [json_name = "rules"] ;
 }
 
 message ErdaRuntimeHPARule {
-  string id = 1  [json_name = "id"] ;
+  string ruleID = 1  [json_name = "ruleId"] ;
   google.protobuf.Timestamp createAt = 2 [json_name = "createAt"] ;
   google.protobuf.Timestamp updateAt = 3 [json_name = "updateAt"] ;
   string serviceName = 4 [json_name = "serviceName"] ;
@@ -304,3 +307,20 @@ message Deployments {
   uint64 replicas = 1 [json_name = "replicas"] ;
 }
 
+message ErdaRuntimeHPAEvents {
+  repeated ErdaRuntimeHPAEvent events = 1 [json_name = "events"] ;
+}
+
+message ErdaRuntimeHPAEvent {
+  string  serviceName = 1 [json_name = "serviceName"] ;
+  string  ruleId = 2 [json_name = "ruleId"] ;
+  HPAEventDetail event = 3 [json_name = "event"] ;
+}
+
+
+message HPAEventDetail {
+  google.protobuf.Timestamp createAt = 1 [json_name = "createAt"] ;
+  string type = 2 [json_name = "type"] ;
+  string reason = 3 [json_name = "reason"] ;
+  string eventMessage = 4 [json_name = "message"] ;
+}

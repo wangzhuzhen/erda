@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runtime
+package orchestrator
 
 import (
-	"github.com/erda-project/erda/internal/tools/orchestrator/dbclient"
-	"github.com/erda-project/erda/internal/tools/orchestrator/spec"
+	"github.com/erda-project/erda/internal/tools/openapi/legacy/api/apis"
 )
 
-type DBService interface {
-	GetRuntimeAllowNil(id uint64) (*dbclient.Runtime, error)
-	FindRuntime(id spec.RuntimeUniqueId) (*dbclient.Runtime, error)
-	FindLastDeployment(id uint64) (*dbclient.Deployment, error)
-	FindDomainsByRuntimeId(id uint64) ([]dbclient.RuntimeDomain, error)
-	GetRuntimeHPARulesByRuntimeId(runtimeID uint64) ([]dbclient.RuntimeHPA, error)
-	GetRuntime(id uint64) (*dbclient.Runtime, error)
-	UpdateRuntime(runtime *dbclient.Runtime) error
+var ORCHESTRATOR_RUNTIME_HPA_EVENTS_LIST = apis.ApiSpec{
+	Path:        "/api/runtimes/autoscaler/hpa-event-get",
+	BackendPath: "/api/runtimes/autoscaler/hpa-event-get",
+	Host:        "orchestrator.marathon.l4lb.thisdcos.directory:8081",
+	Scheme:      "http",
+	Method:      "GET",
+	CheckLogin:  true,
+	//CheckToken:   true,
+	//RequestType:  apistructs.RuntimeInspectRequest{},
+	//ResponseType: apistructs.RuntimeInspectResponse{},
+	Doc:       `获取 Runtime 的 Service 的 HPA 事件列表`,
+	IsOpenAPI: true,
 }

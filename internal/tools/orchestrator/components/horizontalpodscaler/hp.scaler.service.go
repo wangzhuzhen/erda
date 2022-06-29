@@ -36,7 +36,6 @@ import (
 	"github.com/erda-project/erda/internal/pkg/user"
 	patypes "github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler/types"
 	"github.com/erda-project/erda/internal/tools/orchestrator/dbclient"
-	"github.com/erda-project/erda/internal/tools/orchestrator/events"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/impl/servicegroup"
 	"github.com/erda-project/erda/internal/tools/orchestrator/services/apierrors"
 	"github.com/erda-project/erda/internal/tools/orchestrator/spec"
@@ -49,18 +48,18 @@ type hpscalerService struct {
 	//p *provider
 	bundle           BundleService
 	db               DBService
-	evMgr            EventManagerService
 	serviceGroupImpl servicegroup.ServiceGroup
 }
 
+// CreateRuntimeHPARules create HPA rules, and apply them
 func (s *hpscalerService) CreateRuntimeHPARules(ctx context.Context, req *pb.HPARuleCreateRequest) (*pb.HPACommonResponse, error) {
 	var (
 		userID user.ID
 		err    error
 	)
 
-	if req.RuntimeInfo == nil || req.RuntimeInfo.RuntimeID <= 0 {
-		return nil, errors.New(fmt.Sprint("[CreateRuntimeHPARules] runtime not set or set invalid runtimeId, runtimeId must bigger than 0"))
+	if req.RuntimeID <= 0 {
+		return nil, errors.New(fmt.Sprint("[CreateRuntimeHPARules] set invalid runtimeId, runtimeId must bigger than 0"))
 	}
 
 	if len(req.Services) == 0 {
@@ -71,7 +70,7 @@ func (s *hpscalerService) CreateRuntimeHPARules(ctx context.Context, req *pb.HPA
 		return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] get userID failed, error: %v", err))
 	}
 
-	runtime, err := s.db.GetRuntime(req.RuntimeInfo.RuntimeID)
+	runtime, err := s.db.GetRuntime(req.RuntimeID)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] get runtime failed, error: %v", err))
 	}
@@ -91,6 +90,47 @@ func (s *hpscalerService) CreateRuntimeHPARules(ctx context.Context, req *pb.HPA
 		return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] get app detail info failed, error: %v", err))
 	}
 
+	if len(req.Services) <= 0 {
+		return nil, errors.New(fmt.Sprint("[CreateRuntimeHPARules] failed: not set service"))
+	} else {
+		if req.Services[0].Deployments == nil || req.Services[0].Deployments.Replicas == 0 {
+			uniqueId := spec.RuntimeUniqueId{
+				ApplicationId: runtime.ApplicationID,
+				Workspace:     runtime.Workspace,
+				Name:          runtime.Name,
+			}
+			preDeploy, err := s.db.GetPreDeployment(uniqueId)
+			if err != nil {
+				return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] get PreDeployment failed: %v", err))
+			}
+
+			var diceObj diceyml.Object
+			if preDeploy.DiceOverlay != "" {
+				if err = json.Unmarshal([]byte(preDeploy.DiceOverlay), &diceObj); err != nil {
+					return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] Unmarshall preDeploy.DiceOverlay failed: %v", err))
+				}
+			} else {
+				if err = json.Unmarshal([]byte(preDeploy.Dice), &diceObj); err != nil {
+					return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] Unmarshall preDeploy.Dice failed: %v", err))
+				}
+			}
+			for idx, svc := range req.Services {
+				if _, ok := diceObj.Services[svc.ServiceName]; ok {
+					req.Services[idx].Deployments = &pb.Deployments{
+						Replicas: uint64(diceObj.Services[svc.ServiceName].Deployments.Replicas),
+					}
+					req.Services[idx].Resources = &pb.Resources{
+						Cpu:  diceObj.Services[svc.ServiceName].Resources.CPU,
+						Mem:  int64(diceObj.Services[svc.ServiceName].Resources.Mem),
+						Disk: 0,
+					}
+				} else {
+					return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] error: service %s not found in PreDeployment", svc.ServiceName))
+				}
+			}
+		}
+	}
+
 	err = validateHPARuleConfig(req.Services)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("[CreateRuntimeHPARules] validate rules failed, error: %v", err))
@@ -98,16 +138,9 @@ func (s *hpscalerService) CreateRuntimeHPARules(ctx context.Context, req *pb.HPA
 
 	return s.createHPARule(userInfo, appInfo, runtime, req.Services)
 }
-func productErrsRes(err error) []*pb.ErrorResponse {
-	errsRes := make([]*pb.ErrorResponse, 0)
-	errResp := pb.ErrorResponse{
-		Msg: err.Error(),
-	}
-	errsRes = append(errsRes, &errResp)
-	return errsRes
-}
 
-func (s *hpscalerService) ListRuntimeHPARules(ctx context.Context, req *pb.ListRequest) (*pb.HPARulesLisResponse, error) {
+// ListRuntimeHPARules list HPA rules for services in runtime, if no services in req, then list all HPA rules in the runtime
+func (s *hpscalerService) ListRuntimeHPARules(ctx context.Context, req *pb.ListRequest) (*pb.ErdaRuntimeHPARules, error) {
 	var (
 		userID user.ID
 		err    error
@@ -151,13 +184,15 @@ func (s *hpscalerService) ListRuntimeHPARules(ctx context.Context, req *pb.ListR
 
 	return s.listHPARules(runtime, services)
 }
+
+// UpdateRuntimeHPARules update HPA rules with the target ruleIDs
 func (s *hpscalerService) UpdateRuntimeHPARules(ctx context.Context, req *pb.ErdaRuntimeHPARules) (*pb.HPACommonResponse, error) {
 	var (
 		userID user.ID
 		err    error
 	)
 
-	if req.RuntimeInfo == nil || req.RuntimeInfo.RuntimeID <= 0 {
+	if req.RuntimeID <= 0 {
 		return nil, errors.New(fmt.Sprint("[UpdateRuntimeHPARules] runtime not set or set invalid runtimeId, runtimeId must bigger than 0"))
 	}
 
@@ -169,7 +204,7 @@ func (s *hpscalerService) UpdateRuntimeHPARules(ctx context.Context, req *pb.Erd
 		return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] get userID and orgID failed: %v", err))
 	}
 
-	runtime, err := s.db.GetRuntime(req.RuntimeInfo.RuntimeID)
+	runtime, err := s.db.GetRuntime(req.RuntimeID)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] get runtime failed: %v", err))
 	}
@@ -195,49 +230,47 @@ func (s *hpscalerService) UpdateRuntimeHPARules(ctx context.Context, req *pb.Erd
 	newRules := make(map[string]*pb.ScaledConfig)
 	for _, rule := range req.Rules {
 		if rule.ScaledConfig == nil {
-			s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
-			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed for svc %s: scaledConfig not set", rule.ServiceName))
+			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed: scaledConfig not set for rule_id: %s", rule.RuleID))
 		}
 
-		ruleHPA, err := s.db.GetErdaHRuntimePARuleByRuleId(rule.Id)
+		ruleHPA, err := s.db.GetErdaRuntimeHPARuleByRuleId(rule.RuleID)
 		if err != nil {
-			s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
-			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed for svc %s: get rule by rule_id %s with error: %v", rule.ServiceName, rule.Id, err))
+			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed: get rule by rule_id %s with error: %v", rule.RuleID, err))
 		}
 
 		oldRules[ruleHPA.RuleID] = ruleHPA
 		newRule := &pb.ScaledConfig{}
 		err = json.Unmarshal([]byte(ruleHPA.Rules), newRule)
 		if err != nil {
-			s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
-			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed for svc %s: Unmarshal rule by rule_id %s with error: %v", rule.ServiceName, rule.Id, err))
+			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed: Unmarshal rule by rule_id %s with error: %v", rule.RuleID, err))
 		}
 		newRules[ruleHPA.RuleID] = newRule
 
 		err = validateHPARuleConfigCustom(rule.RuleName, 2*newRule.MaxReplicaCount, rule.ScaledConfig)
 		if err != nil {
-			s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
-			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed for svc %s:validate rule by rule_id %s with error: %v", rule.ServiceName, rule.Id, err))
+			return nil, errors.New(fmt.Sprintf("[UpdateRuntimeHPARules] update hpa rule failed for svc %s:validate rule by rule_id %s with error: %v", ruleHPA.ServiceName, rule.RuleID, err))
 		}
 	}
 
 	return s.updateHPARules(userInfo, appInfo, runtime, newRules, oldRules, req)
 }
+
+// DeleteHPARulesByIds delete HPA rules by target ruleIDs
 func (s *hpscalerService) DeleteHPARulesByIds(ctx context.Context, req *pb.DeleteRuntimeHPARulesRequest) (*pb.HPACommonResponse, error) {
 	var (
 		userID user.ID
 		err    error
 	)
 
-	if req.RuntimeInfo == nil || req.RuntimeInfo.RuntimeID <= 0 {
-		return nil, errors.New(fmt.Sprint("[DeleteHPARulesByIds] runtime not set or set invalid runtimeId, runtimeId must bigger than 0"))
+	if req.RuntimeID <= 0 {
+		return nil, errors.New(fmt.Sprint("[DeleteHPARulesByIds] set invalid runtimeId, runtimeId must bigger than 0"))
 	}
 
 	if userID, _, err = s.GetUserAndOrgID(ctx); err != nil {
 		return nil, errors.New(fmt.Sprintf("[DeleteHPARulesByIds] get userID and orgID failed: %v", err))
 	}
 
-	runtime, err := s.db.GetRuntime(req.RuntimeInfo.RuntimeID)
+	runtime, err := s.db.GetRuntime(req.RuntimeID)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("[DeleteHPARulesByIds] get runtime failed: %v", err))
 	}
@@ -250,13 +283,14 @@ func (s *hpscalerService) DeleteHPARulesByIds(ctx context.Context, req *pb.Delet
 	return s.deleteHPARule(userID.String(), runtime, req.Rules)
 }
 
+// ApplyOrCancelHPARulesByIds apply or cancel HPA rules by target ruleIDs
 func (s *hpscalerService) ApplyOrCancelHPARulesByIds(ctx context.Context, req *pb.ApplyOrCancelHPARulesRequest) (*pb.HPACommonResponse, error) {
 	var (
 		userID user.ID
 		err    error
 	)
 
-	if req.RuntimeInfo == nil || req.RuntimeInfo.RuntimeID <= 0 {
+	if req.RuntimeID <= 0 {
 		return nil, errors.New(fmt.Sprint("[ApplyOrCancelHPARulesByIds] runtime not set or set invalid runtimeId, runtimeId must bigger than 0"))
 	}
 
@@ -267,7 +301,7 @@ func (s *hpscalerService) ApplyOrCancelHPARulesByIds(ctx context.Context, req *p
 		return nil, errors.New(fmt.Sprintf("[ApplyOrCancelHPARulesByIds] get userID and orgID failed: %v", err))
 	}
 
-	runtime, err := s.db.GetRuntime(req.RuntimeInfo.RuntimeID)
+	runtime, err := s.db.GetRuntime(req.RuntimeID)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("[ApplyOrCancelHPARulesByIds] get runtime failed: %v", err))
 	}
@@ -284,7 +318,7 @@ func (s *hpscalerService) ApplyOrCancelHPARulesByIds(ctx context.Context, req *p
 	return s.applyOrCancelHPARule(userInfo, runtime, req.RuleAction)
 }
 
-func (s *hpscalerService) GetRuntimeBaseInfo(ctx context.Context, req *pb.ListRequest) (*pb.RuntimeServiceBaseInfoListResponse, error) {
+func (s *hpscalerService) GetRuntimeBaseInfo(ctx context.Context, req *pb.ListRequest) (*pb.RuntimeServiceBaseInfos, error) {
 	var (
 		err    error
 		userID user.ID
@@ -347,17 +381,55 @@ func (s *hpscalerService) GetRuntimeBaseInfo(ctx context.Context, req *pb.ListRe
 			},
 		})
 	}
-
-	return &pb.RuntimeServiceBaseInfoListResponse{
-		Success: true,
-		RuntimeServices: &pb.RuntimeServiceBaseInfos{
-			RuntimeInfo: &pb.RuntimeInfo{
-				RuntimeID: runtimeID,
-			},
-			ServiceBaseInfos: svcInfos,
-		},
-		Errors: nil,
+	return &pb.RuntimeServiceBaseInfos{
+		RuntimeID:        runtimeID,
+		ServiceBaseInfos: svcInfos,
 	}, nil
+}
+
+func (s *hpscalerService) ListRuntimeHPAEvents(ctx context.Context, req *pb.ListRequest) (*pb.ErdaRuntimeHPAEvents, error) {
+	var (
+		userID user.ID
+		err    error
+	)
+	logrus.Infof("get runtime ID %s hpa rules for services = %s", req.RuntimeId, req.Services)
+	if req.RuntimeId == "" {
+		return nil, errors.New(fmt.Sprint("[ListRuntimeHPAEvents] runtimeId not set"))
+	}
+	reqServices := strings.Split(req.Services, ",")
+	//reqServices maybe length as 1 and with empty value
+	services := make([]string, 0)
+
+	for _, svc := range reqServices {
+		if svc != "" {
+			services = append(services, svc)
+		}
+	}
+
+	runtimeID, err := strconv.ParseUint(req.RuntimeId, 10, 64)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("[ListRuntimeHPAEvents] parse runtimeID failed: %v", err))
+	}
+
+	if runtimeID <= 0 {
+		return nil, errors.New(fmt.Sprint("[ListRuntimeHPAEvents] runtime not set or set invalid runtimeId, runtimeId must bigger than 0"))
+	}
+
+	if userID, _, err = s.GetUserAndOrgID(ctx); err != nil {
+		return nil, errors.New(fmt.Sprintf("[ListRuntimeHPAEvents] get userID and orgID failed: %v", err))
+	}
+
+	runtime, err := s.db.GetRuntime(runtimeID)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("[ListRuntimeHPAEvents] getruntime failed: %v", err))
+	}
+
+	err = s.checkRuntimeScopePermission(userID, runtime, apistructs.GetAction)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("[ListRuntimeHPAEvents] check permission failed: %v", err))
+	}
+
+	return s.listHPAEvents(runtime.ID, services)
 }
 
 func (s *hpscalerService) HPScaleManual(ctx context.Context, req *pb.ManualHPRequest) (*pb.HPManualResponse, error) {
@@ -405,7 +477,6 @@ func (s *hpscalerService) createHPARule(userInfo *apistructs.UserInfo, appInfo *
 	sgHPAObjects, err := s.serviceGroupImpl.Scale(sg)
 	if err != nil {
 		createErr := errors.Errorf("create hpa rule failed for service %s for runtime %s for runtime %#v failed for servicegroup, err: %v", sg.Services[0].Name, uniqueId.Name, uniqueId, err)
-		s.eventManager(userInfo.ID, events.RuntimeHPARuleCreateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
 		return nil, errors.New(fmt.Sprintf("[createHPARule] create hpa rule failed, error: %v", createErr))
 	}
 
@@ -413,7 +484,6 @@ func (s *hpscalerService) createHPARule(userInfo *apistructs.UserInfo, appInfo *
 	if !ok {
 		logrus.Errorf("ErdaHPALabelValueCreate Scale return sgHPAObjects: %#v is not map", sgHPAObjects)
 		createErr := errors.Errorf("create hpa rule failed for service %s for runtime %s for runtimeUniqueId %#v failed for servicegroup, err: return is not an map[string]hpatypes.ErdaHPAObject object", sg.Services[0].Name, uniqueId.Name, uniqueId)
-		s.eventManager(userInfo.ID, events.RuntimeHPARuleCreateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
 		return nil, errors.New(fmt.Sprintf("[createHPARule] create hpa rule failed, error: %v", createErr))
 	}
 
@@ -424,7 +494,16 @@ func (s *hpscalerService) createHPARule(userInfo *apistructs.UserInfo, appInfo *
 			continue
 		}
 		sc := serviceRules[idx].ScaledConfig
-		sc.RuleName = strings.ToLower(serviceRules[idx].RuleName)
+		if serviceRules[idx].RuleName != "" {
+			sc.RuleName = strings.ToLower(serviceRules[idx].RuleName)
+		} else {
+			sc.RuleName = svc
+		}
+		sc.RuleID = uuid.NewString()
+		sc.RuntimeID = runtime.ID
+		sc.ServiceName = svc
+		sc.ApplicationID = appInfo.ID
+		sc.OrgID = runtime.OrgID
 		sc.RuleNameSpace = obj.Namespace
 		sc.ScaleTargetRef = &pb.ScaleTargetRef{
 			Kind:       obj.Kind,
@@ -436,23 +515,25 @@ func (s *hpscalerService) createHPARule(userInfo *apistructs.UserInfo, appInfo *
 		}
 
 		scb, _ := json.Marshal(&sc)
-		runtimeSvcHPA := convertRuntimeServiceHPA(userInfo, appInfo, runtime, svc, serviceRules[idx].RuleName, obj.Namespace, string(scb))
+		runtimeSvcHPA := convertRuntimeServiceHPA(userInfo, appInfo, runtime, svc, serviceRules[idx].RuleName, sc.RuleID, obj.Namespace, string(scb))
+
+		applyErr := s.applyOrCancelRule(runtime, runtimeSvcHPA, sc.RuleID, patypes.ErdaHPALabelValueApply)
+		if applyErr != nil {
+			return nil, errors.Errorf("[applyOrCancelHPARule] applyOrCancelRule failed: %v", applyErr)
+		}
+		runtimeSvcHPA.IsApplied = patypes.RuntimeHPARuleApplied
+
 		err := s.db.CreateErdaHPARule(runtimeSvcHPA)
 		if err != nil {
 			createErr := errors.Errorf("create hpa rule record failed for runtime %s for runtime %#v failed for service %s in servicegroup %#v, err: %v", uniqueId.Name, uniqueId, svc, *sg, err)
-			s.eventManager(userInfo.ID, events.RuntimeHPARuleCreateFailed, *runtimeSvcHPA)
 			return nil, errors.New(fmt.Sprintf("[createHPARule] create hpa rule failed, error: %v", createErr))
 		}
-		s.eventManager(userInfo.ID, events.RuntimeHPARuleCreated, *runtimeSvcHPA)
 	}
 
-	return &pb.HPACommonResponse{
-		Success: true,
-		Errors:  nil,
-	}, nil
+	return nil, nil
 }
 
-func (s *hpscalerService) listHPARules(runtime *dbclient.Runtime, services []string) (*pb.HPARulesLisResponse, error) {
+func (s *hpscalerService) listHPARules(runtime *dbclient.Runtime, services []string) (*pb.ErdaRuntimeHPARules, error) {
 	id := spec.RuntimeUniqueId{
 		ApplicationId: runtime.ApplicationID,
 		Workspace:     runtime.Workspace,
@@ -460,7 +541,7 @@ func (s *hpscalerService) listHPARules(runtime *dbclient.Runtime, services []str
 	}
 
 	logrus.Infof("get runtime hpa rules with spec.RuntimeUniqueId: %#v and services [%v]", id, services)
-	hpaRules, err := s.db.GetErdaHRuntimePARulesByServices(id, services)
+	hpaRules, err := s.db.GetErdaRuntimeHPARulesByServices(id, services)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("[listHPARules] get hpa rule failed, error: %v", err))
 	}
@@ -468,31 +549,25 @@ func (s *hpscalerService) listHPARules(runtime *dbclient.Runtime, services []str
 		return nil, errors.New("[listHPARules] list runtime services hpa rules failed: not found")
 	}
 
-	runtimeInfo := buildRuntimeInfo(hpaRules[0])
-
 	rules := make([]*pb.ErdaRuntimeHPARule, 0)
 	for _, rule := range hpaRules {
 		rules = append(rules, buildRuntimeHPARule(rule))
 	}
 
-	return &pb.HPARulesLisResponse{
-		Success: true,
-		RuntimeRules: &pb.ErdaRuntimeHPARules{
-			RuntimeInfo: runtimeInfo,
-			Rules:       rules,
-		},
+	return &pb.ErdaRuntimeHPARules{
+		RuntimeID: hpaRules[0].RuntimeID,
+		Rules:     rules,
 	}, nil
 }
 
 func (s *hpscalerService) updateHPARules(userInfo *apistructs.UserInfo, appInfo *apistructs.ApplicationDTO, runtime *dbclient.Runtime, newRulesBase map[string]*pb.ScaledConfig, oldRules map[string]dbclient.RuntimeHPA, req *pb.ErdaRuntimeHPARules) (*pb.HPACommonResponse, error) {
 	for _, rule := range req.Rules {
 		if rule.ScaledConfig == nil {
-			s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, convertRuntimeToRuntimeHPA(runtime, userInfo, appInfo))
 			return nil, errors.Errorf("[updateHPARules] update hpa rule failed for svc %s: scaledConfig not set", rule.ServiceName)
 		}
 
-		ruleHPA := oldRules[rule.Id]
-		newRule := newRulesBase[rule.Id]
+		ruleHPA := oldRules[rule.RuleID]
+		newRule := newRulesBase[rule.RuleID]
 		needUpdate := false
 
 		if rule.ScaledConfig.MinReplicaCount != 0 && newRule.MinReplicaCount != rule.ScaledConfig.MinReplicaCount {
@@ -503,6 +578,16 @@ func (s *hpscalerService) updateHPARules(userInfo *apistructs.UserInfo, appInfo 
 		if rule.ScaledConfig.MaxReplicaCount != 0 && newRule.MaxReplicaCount != rule.ScaledConfig.MaxReplicaCount {
 			needUpdate = true
 			newRule.MaxReplicaCount = rule.ScaledConfig.MaxReplicaCount
+		}
+
+		if rule.ScaledConfig.PollingInterval != newRule.PollingInterval {
+			needUpdate = true
+			newRule.PollingInterval = rule.ScaledConfig.PollingInterval
+		}
+
+		if rule.ScaledConfig.CooldownPeriod != newRule.CooldownPeriod {
+			needUpdate = true
+			newRule.CooldownPeriod = rule.ScaledConfig.CooldownPeriod
 		}
 
 		if rule.ScaledConfig.Advanced != nil && rule.ScaledConfig.Advanced.RestoreToOriginalReplicaCount != newRule.Advanced.RestoreToOriginalReplicaCount {
@@ -557,7 +642,6 @@ func (s *hpscalerService) updateHPARules(userInfo *apistructs.UserInfo, appInfo 
 				// 已部署，需要删除，然后重新部署
 				reApplyErr := s.applyOrCancelRule(runtime, updatedRule, updatedRule.RuleID, patypes.ErdaHPALabelValueReApply)
 				if reApplyErr != nil {
-					s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, *updatedRule)
 					return nil, errors.Errorf("[updateHPARules] applyOrCancelRule failed: %v", reApplyErr)
 				}
 			}
@@ -565,16 +649,12 @@ func (s *hpscalerService) updateHPARules(userInfo *apistructs.UserInfo, appInfo 
 			// 未部署，直接更新
 			err := s.db.UpdateErdaHPARule(updatedRule)
 			if err != nil {
-				s.eventManager(userInfo.ID, events.RuntimeHPAUpdateFailed, *updatedRule)
-				return nil, errors.Errorf("[updateHPARules] update hpa rule failed for svc %s: update rule by rule_id %s with error: %v", rule.ServiceName, rule.Id, err)
+				return nil, errors.Errorf("[updateHPARules] update hpa rule failed for svc %s: update rule by rule_id %s with error: %v", rule.ServiceName, rule.RuleID, err)
 			}
-			s.eventManager(userInfo.ID, events.RuntimeHPAUpdated, *updatedRule)
 		}
 	}
 
-	return &pb.HPACommonResponse{
-		Success: true,
-	}, nil
+	return nil, nil
 }
 
 func (s *hpscalerService) deleteHPARule(userID string, runtime *dbclient.Runtime, ruleIds []string) (*pb.HPACommonResponse, error) {
@@ -583,11 +663,8 @@ func (s *hpscalerService) deleteHPARule(userID string, runtime *dbclient.Runtime
 	ruleIdsMap := make(map[string]dbclient.RuntimeHPA)
 	if len(ruleIds) == 0 {
 		//delete all rules in a runtime
-		rules, err := s.db.GetErdaHRuntimePARulesByRuntimeId(runtime.ID)
+		rules, err := s.db.GetErdaRuntimeHPARulesByRuntimeId(runtime.ID)
 		if err != nil {
-			s.eventManager(userID, events.RuntimeHPADeleteFailed, dbclient.RuntimeHPA{
-				RuntimeID: runtime.ID,
-			})
 			return nil, errors.Errorf("[deleteHPARule] GetErdaHRuntimePARulesByRuntimeId failed: %v", err)
 		}
 
@@ -603,11 +680,8 @@ func (s *hpscalerService) deleteHPARule(userID string, runtime *dbclient.Runtime
 		if ok {
 			runtimeHPA = rule
 		} else {
-			runtimeHPA, err = s.db.GetErdaHRuntimePARuleByRuleId(ruleId)
+			runtimeHPA, err = s.db.GetErdaRuntimeHPARuleByRuleId(ruleId)
 			if err != nil {
-				s.eventManager(userID, events.RuntimeHPADeleteFailed, dbclient.RuntimeHPA{
-					RuleID: ruleId,
-				})
 				return nil, errors.Errorf("[deleteHPARule] GetErdaHRuntimePARuleByRuleId failed: %v", err)
 			}
 		}
@@ -616,28 +690,25 @@ func (s *hpscalerService) deleteHPARule(userID string, runtime *dbclient.Runtime
 			// 已部署，需要删除
 			cancelErr := s.applyOrCancelRule(runtime, &runtimeHPA, runtimeHPA.RuleID, patypes.ErdaHPALabelValueCancel)
 			if cancelErr != nil {
-				s.eventManager(userID, events.RuntimeHPADeleteFailed, runtimeHPA)
-				return nil, errors.Errorf("[deleteHPARule] applyOrCancelRule failed: %v", err)
+				return nil, errors.Errorf("[deleteHPARule] applyOrCancelRule failed: %v", cancelErr)
 			}
 		}
 
-		if err := s.db.DeleteErdaHRuntimePARulesByRuleId(ruleId); err != nil {
-			s.eventManager(userID, events.RuntimeHPADeleteFailed, runtimeHPA)
-			return nil, errors.Errorf("[deleteHPARule] DeleteErdaHRuntimePARulesByRuleId failed: %v", err)
+		if err = s.db.DeleteErdaRuntimeHPAEventsByRuleId(ruleId); err != nil {
+			logrus.Warnf("[deleteHPARule] DeleteErdaRuntimeHPAEventsByRuleId failed: %v", err)
 		}
 
-		s.eventManager(userID, events.RuntimeHPADeleted, runtimeHPA)
+		if err = s.db.DeleteErdaRuntimeHPARulesByRuleId(ruleId); err != nil {
+			return nil, errors.Errorf("[deleteHPARule] DeleteErdaHRuntimePARulesByRuleId failed: %v", err)
+		}
 	}
 
-	return &pb.HPACommonResponse{
-		Success: true,
-		Errors:  nil,
-	}, nil
+	return nil, nil
 }
 
 func (s *hpscalerService) applyOrCancelHPARule(userInfo *apistructs.UserInfo, runtime *dbclient.Runtime, RuleAction []*pb.RuleAction) (*pb.HPACommonResponse, error) {
 	for idx := range RuleAction {
-		hpaRule, err := s.db.GetErdaHRuntimePARuleByRuleId(RuleAction[idx].RuleId)
+		hpaRule, err := s.db.GetErdaRuntimeHPARuleByRuleId(RuleAction[idx].RuleId)
 		if err != nil {
 			return nil, errors.Errorf("[applyOrCancelHPARule] GetErdaHRuntimePARuleByRuleId failed: %v", err)
 		}
@@ -648,8 +719,7 @@ func (s *hpscalerService) applyOrCancelHPARule(userInfo *apistructs.UserInfo, ru
 				// 未部署，需要部署
 				applyErr := s.applyOrCancelRule(runtime, &hpaRule, RuleAction[idx].RuleId, patypes.ErdaHPALabelValueApply)
 				if applyErr != nil {
-					s.eventManager(userInfo.ID, events.RuntimeHPARuleApplyFailed, hpaRule)
-					return nil, errors.Errorf("[applyOrCancelHPARule] applyOrCancelRule failed: %v", err)
+					return nil, errors.Errorf("[applyOrCancelHPARule] applyOrCancelRule failed: %v", applyErr)
 				}
 				hpaRule.UserID = userInfo.ID
 				hpaRule.UserName = userInfo.Name
@@ -659,10 +729,8 @@ func (s *hpscalerService) applyOrCancelHPARule(userInfo *apistructs.UserInfo, ru
 				if err != nil {
 					return nil, errors.Errorf("[applyOrCancelHPARule] update rule with ruleId %s error: %v", hpaRule.RuleID, err)
 				}
-				s.eventManager(userInfo.ID, events.RuntimeHPARuleApplyOK, hpaRule)
 			} else {
 				// 已部署，无需部署
-				s.eventManager(userInfo.ID, events.RuntimeHPARuleApplyFailed, hpaRule)
 				return nil, errors.Errorf("[applyOrCancelHPARule] hpa rule %v have applied, no need apply it again", hpaRule.RuleID)
 			}
 
@@ -671,7 +739,6 @@ func (s *hpscalerService) applyOrCancelHPARule(userInfo *apistructs.UserInfo, ru
 				// 未删除，需要删除
 				cancelErr := s.applyOrCancelRule(runtime, nil, RuleAction[idx].RuleId, patypes.ErdaHPALabelValueCancel)
 				if cancelErr != nil {
-					s.eventManager(userInfo.ID, events.RuntimeHPARuleCancelFailed, hpaRule)
 					return nil, errors.Errorf("[applyOrCancelHPARule] update rule with ruleId %s for applyOrCancelRule error: %v", hpaRule.RuleID, cancelErr)
 				}
 				hpaRule.UserID = userInfo.ID
@@ -682,10 +749,8 @@ func (s *hpscalerService) applyOrCancelHPARule(userInfo *apistructs.UserInfo, ru
 				if err != nil {
 					return nil, errors.Errorf("[applyOrCancelHPARule] UpdateErdaHPARule update rule with ruleId %s error: %v", hpaRule.RuleID, err)
 				}
-				s.eventManager(userInfo.ID, events.RuntimeHPARuleCancelOK, hpaRule)
 			} else {
 				// 已删除，无需删除
-				s.eventManager(userInfo.ID, events.RuntimeHPARuleCancelFailed, hpaRule)
 				return nil, errors.Errorf("[applyOrCancelHPARule] hpa rule id %v have canceled, no need cancel it again", hpaRule.RuleID)
 			}
 
@@ -694,12 +759,12 @@ func (s *hpscalerService) applyOrCancelHPARule(userInfo *apistructs.UserInfo, ru
 		}
 	}
 
-	return &pb.HPACommonResponse{Success: true}, nil
+	return nil, nil
 }
 
 func (s *hpscalerService) applyOrCancelRule(runtime *dbclient.Runtime, hpaRule *dbclient.RuntimeHPA, ruleId string, action string) error {
 	if hpaRule == nil {
-		rule, err := s.db.GetErdaHRuntimePARuleByRuleId(ruleId)
+		rule, err := s.db.GetErdaRuntimeHPARuleByRuleId(ruleId)
 		if err != nil {
 			return err
 		}
@@ -754,12 +819,12 @@ func isTriggersEqual(old, new []*pb.ScaleTriggers) bool {
 	return true
 }
 
-func convertRuntimeServiceHPA(userInfo *apistructs.UserInfo, appInfo *apistructs.ApplicationDTO, runtime *dbclient.Runtime, serviceName, ruleName, namespace, rulesJson string) *dbclient.RuntimeHPA {
+func convertRuntimeServiceHPA(userInfo *apistructs.UserInfo, appInfo *apistructs.ApplicationDTO, runtime *dbclient.Runtime, serviceName, ruleName, ruleID, namespace, rulesJson string) *dbclient.RuntimeHPA {
 	if ruleName == "" {
 		ruleName = serviceName
 	}
 	return &dbclient.RuntimeHPA{
-		RuleID:                 uuid.NewString(),
+		RuleID:                 ruleID,
 		RuleName:               ruleName,
 		RuleNameSpace:          namespace,
 		OrgID:                  appInfo.OrgID,
@@ -784,50 +849,13 @@ func convertRuntimeServiceHPA(userInfo *apistructs.UserInfo, appInfo *apistructs
 	}
 }
 
-func convertRuntimeToRuntimeHPA(runtime *dbclient.Runtime, userInfo *apistructs.UserInfo, appInfo *apistructs.ApplicationDTO) dbclient.RuntimeHPA {
-	return dbclient.RuntimeHPA{
-		OrgID:                  appInfo.OrgID,
-		OrgName:                appInfo.OrgName,
-		OrgDisPlayName:         appInfo.OrgDisplayName,
-		ProjectID:              appInfo.ProjectID,
-		ProjectName:            appInfo.ProjectName,
-		ProjectDisplayName:     appInfo.ProjectDisplayName,
-		ApplicationID:          appInfo.ID,
-		ApplicationName:        appInfo.Name,
-		ApplicationDisPlayName: appInfo.DisplayName,
-		RuntimeID:              runtime.ID,
-		RuntimeName:            runtime.Name,
-		ClusterName:            runtime.ClusterName,
-		Workspace:              runtime.Workspace,
-		UserID:                 userInfo.ID,
-		UserName:               userInfo.Name,
-		NickName:               userInfo.Nick,
-	}
-}
-
-func buildRuntimeInfo(rule dbclient.RuntimeHPA) *pb.RuntimeInfo {
-	return &pb.RuntimeInfo{
-		OrgID:           rule.OrgID,
-		OrgName:         rule.OrgName,
-		ProjectID:       rule.ProjectID,
-		ProjectName:     rule.ProjectName,
-		ApplicationID:   rule.ApplicationID,
-		ApplicationName: rule.ApplicationName,
-		Workspace:       rule.Workspace,
-		RuntimeID:       rule.RuntimeID,
-		RuntimeName:     rule.RuntimeName,
-		ClusterName:     rule.ClusterName,
-		ClusterType:     "k8s",
-	}
-}
-
 func buildRuntimeHPARule(rule dbclient.RuntimeHPA) *pb.ErdaRuntimeHPARule {
 	uid, _ := strconv.ParseUint(rule.UserID, 10, 64)
 	scaledConfig := pb.ScaledConfig{}
 	json.Unmarshal([]byte(rule.Rules), &scaledConfig)
 
 	return &pb.ErdaRuntimeHPARule{
-		Id:          rule.RuleID,
+		RuleID:      rule.RuleID,
 		CreateAt:    timestamppb.New(rule.CreatedAt),
 		UpdateAt:    timestamppb.New(rule.UpdatedAt),
 		ServiceName: rule.ServiceName,
@@ -888,15 +916,6 @@ func (s *hpscalerService) getAppInfo(id uint64) (*apistructs.ApplicationDTO, err
 	return s.bundle.GetApp(id)
 }
 
-func (s *hpscalerService) eventManager(userId string, eventName events.EventName, hpa dbclient.RuntimeHPA) {
-	event := events.RuntimeEvent{
-		EventName:      eventName,
-		RuntimeHPARule: dbclient.ConvertRuntimeHPARuleDTO(hpa),
-		Operator:       userId,
-	}
-	s.evMgr.EmitEvent(&event)
-}
-
 type ServiceOption func(*hpscalerService) *hpscalerService
 
 func WithBundleService(s BundleService) ServiceOption {
@@ -909,13 +928,6 @@ func WithBundleService(s BundleService) ServiceOption {
 func WithDBService(db DBService) ServiceOption {
 	return func(service *hpscalerService) *hpscalerService {
 		service.db = db
-		return service
-	}
-}
-
-func WithEventManagerService(evMgr EventManagerService) ServiceOption {
-	return func(service *hpscalerService) *hpscalerService {
-		service.evMgr = evMgr
 		return service
 	}
 }
@@ -1005,15 +1017,32 @@ func validateHPARuleConfigCustom(serviceName string, maxReplicas int32, scaledCo
 			return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata", serviceName, idx, trigger.Type)
 		}
 
+		logrus.Infof("XXXXXXX trigger.Type: %s ", trigger.Type)
+
 		switch trigger.Type {
 		case patypes.ErdaHPATriggerCPU, patypes.ErdaHPATriggerMemory:
 			val, ok := trigger.Metadata["type"]
 			if !ok || val != patypes.ErdaHPATriggerCPUMetaType {
 				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata type or invalid type value (need value 'Utilization')", serviceName, idx, trigger.Type)
 			}
+			_, ok = trigger.Metadata["value"]
+			if !ok {
+				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata value", serviceName, idx, trigger.Type)
+			}
+
+			value, err := strconv.Atoi(trigger.Metadata["value"])
+			if err != nil || value >= 100 || value <= 0 {
+				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata value in range ( 0 < value < 100)", serviceName, idx, trigger.Type)
+			}
+
 		case patypes.ErdaHPATriggerCron:
+			val, ok := trigger.Metadata[patypes.ErdaHPATriggerCronMetaTimeZone]
+			if !ok || val == "" {
+				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata %s or invalid value (need as cron express as 'Asia/Shanghai')", serviceName, idx, trigger.Type, patypes.ErdaHPATriggerCronMetaTimeZone)
+			}
+
 			parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-			val, ok := trigger.Metadata[patypes.ErdaHPATriggerCronMetaStart]
+			val, ok = trigger.Metadata[patypes.ErdaHPATriggerCronMetaStart]
 			if !ok || val == "" {
 				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata %s or invalid value (need as cron express as '30 * * * *')", serviceName, idx, trigger.Type, patypes.ErdaHPATriggerCronMetaStart)
 			}
@@ -1046,11 +1075,6 @@ func validateHPARuleConfigCustom(serviceName string, maxReplicas int32, scaledCo
 				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s set medatdata %s need <= maxReplicaCount(%d), ", serviceName, idx, trigger.Type, patypes.ErdaHPATriggerCronMetaDesiredReplicas, scaledConf.MaxReplicaCount)
 			}
 
-			val, ok = trigger.Metadata[patypes.ErdaHPATriggerCronMetaTimeZone]
-			if !ok || val == "" {
-				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set medatdata %s or invalid value (need as cron express as 'Asia/Shanghai')", serviceName, idx, trigger.Type, patypes.ErdaHPATriggerCronMetaTimeZone)
-			}
-
 		default:
 			if len(trigger.Metadata) < 2 {
 				return errors.Errorf("service %s with scaledConfig.triggers[%d] with trigger type %s not set enough medatdata", serviceName, idx, trigger.Type)
@@ -1058,4 +1082,44 @@ func validateHPARuleConfigCustom(serviceName string, maxReplicas int32, scaledCo
 		}
 	}
 	return nil
+}
+
+func (s *hpscalerService) listHPAEvents(runtimeId uint64, services []string) (*pb.ErdaRuntimeHPAEvents, error) {
+	hpaEvents, err := s.db.GetErdaRuntimeHPAEventsByServices(runtimeId, services)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("[listHPAEvents] get hpa events for runtimeId [%d] for service [%v] failed, error: %v", runtimeId, services, err))
+	}
+
+	resultEvents, err := convertHPAEventInfoToErdaRuntimeHPAEvent(hpaEvents)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.ErdaRuntimeHPAEvents{
+		Events: resultEvents,
+	}, nil
+}
+
+func convertHPAEventInfoToErdaRuntimeHPAEvent(hpaEvents []dbclient.HPAEventInfo) ([]*pb.ErdaRuntimeHPAEvent, error) {
+	result := make([]*pb.ErdaRuntimeHPAEvent, 0)
+	for _, ev := range hpaEvents {
+
+		evInfo := patypes.EventDetail{}
+		err := json.Unmarshal([]byte(ev.Event), &evInfo)
+		if err != nil {
+			return nil, errors.New(fmt.Sprintf("[listHPAEvents] Unmarshal hpa events for runtimeId [%d] for service [%v] error: %v", ev.RuntimeID, ev.ServiceName, err))
+		}
+
+		result = append(result, &pb.ErdaRuntimeHPAEvent{
+			ServiceName: ev.ServiceName,
+			RuleId:      ev.RuleID,
+			Event: &pb.HPAEventDetail{
+				CreateAt:     timestamppb.New(ev.CreatedAt),
+				Type:         evInfo.Type,
+				Reason:       evInfo.Reason,
+				EventMessage: evInfo.Message,
+			},
+		})
+	}
+	return result, nil
 }

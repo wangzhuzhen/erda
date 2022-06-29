@@ -34,18 +34,18 @@ func (d *dbServiceImpl) UpdateErdaHPARule(runtimeHPA *dbclient.RuntimeHPA) error
 	return d.db.UpdateRuntimeHPA(runtimeHPA)
 }
 
-func (d *dbServiceImpl) GetErdaHRuntimePARulesByServices(id spec.RuntimeUniqueId, services []string) ([]dbclient.RuntimeHPA, error) {
+func (d *dbServiceImpl) GetErdaRuntimeHPARulesByServices(id spec.RuntimeUniqueId, services []string) ([]dbclient.RuntimeHPA, error) {
 	return d.db.GetRuntimeHPAByServices(id, services)
 }
 
-func (d *dbServiceImpl) DeleteErdaHRuntimePARulesByRuleId(ruleId string) error {
+func (d *dbServiceImpl) DeleteErdaRuntimeHPARulesByRuleId(ruleId string) error {
 	if err := d.db.DeleteRuntimeHPAByRuleId(ruleId); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (d *dbServiceImpl) GetErdaHRuntimePARuleByRuleId(ruleId string) (dbclient.RuntimeHPA, error) {
+func (d *dbServiceImpl) GetErdaRuntimeHPARuleByRuleId(ruleId string) (dbclient.RuntimeHPA, error) {
 	runtimeHPA, err := d.db.GetRuntimeHPARuleByRuleId(ruleId)
 	if err != nil {
 		return dbclient.RuntimeHPA{}, err
@@ -53,7 +53,7 @@ func (d *dbServiceImpl) GetErdaHRuntimePARuleByRuleId(ruleId string) (dbclient.R
 	return *runtimeHPA, nil
 }
 
-func (d *dbServiceImpl) GetErdaHRuntimePARulesByRuntimeId(runtimeID uint64) ([]dbclient.RuntimeHPA, error) {
+func (d *dbServiceImpl) GetErdaRuntimeHPARulesByRuntimeId(runtimeID uint64) ([]dbclient.RuntimeHPA, error) {
 	runtimeHPAs, err := d.db.GetRuntimeHPARulesByRuntimeId(runtimeID)
 	if err != nil {
 		return []dbclient.RuntimeHPA{}, err
@@ -67,6 +67,17 @@ func (d *dbServiceImpl) GetRuntime(id uint64) (*dbclient.Runtime, error) {
 
 func (d *dbServiceImpl) GetPreDeployment(uniqueId spec.RuntimeUniqueId) (*dbclient.PreDeployment, error) {
 	return d.db.FindPreDeployment(uniqueId)
+}
+
+func (d *dbServiceImpl) GetErdaRuntimeHPAEventsByServices(runtimeId uint64, services []string) ([]dbclient.HPAEventInfo, error) {
+	return d.db.GetRuntimeHPAEventsByServices(runtimeId, services)
+}
+
+func (d *dbServiceImpl) DeleteErdaRuntimeHPAEventsByRuleId(ruleId string) error {
+	if err := d.db.DeleteRuntimeHPAEventsByRuleId(ruleId); err != nil {
+		return err
+	}
+	return nil
 }
 
 func newDBService(db *dbclient.DBClient) DBService {

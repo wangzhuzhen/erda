@@ -17,6 +17,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"github.com/sirupsen/logrus"
 	"net/url"
 	"strconv"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/erda-project/erda-proto-go/orchestrator/runtime/pb"
 	"github.com/erda-project/erda/apistructs"
 	"github.com/erda-project/erda/internal/pkg/user"
+	patypes "github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler/types"
 	"github.com/erda-project/erda/internal/tools/orchestrator/dbclient"
 	"github.com/erda-project/erda/internal/tools/orchestrator/events"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/impl/servicegroup"
@@ -250,6 +252,11 @@ func (r *Service) GetRuntime(ctx context.Context, request *pb.GetRuntimeRequest)
 		return nil, err
 	}
 
+	hpaRules, err := r.db.GetRuntimeHPARulesByRuntimeId(runtime.ID)
+	if err != nil {
+		logrus.Warnf("[GetRuntime] get hpa rules for runtimeId %d failed.", runtime.ID)
+	}
+
 	if err = r.checkRuntimeScopePermission(userID, runtime, apistructs.GetAction); err != nil {
 		return nil, err
 	}
@@ -289,6 +296,7 @@ func (r *Service) GetRuntime(ctx context.Context, request *pb.GetRuntimeRequest)
 	if deployment.Status == apistructs.DeploymentStatusDeploying {
 		updateStatusWhenDeploying(ri)
 	}
+	updateHPARuleEnabledStatusToDisplay(hpaRules, ri)
 
 	return ri, nil
 }
@@ -502,6 +510,23 @@ func (r *Service) inspectDomains(id uint64) (map[string][]string, error) {
 	}
 
 	return domainMap, nil
+}
+
+// 显示 service 对应是否开启 HPA
+func updateHPARuleEnabledStatusToDisplay(hpaRules []dbclient.RuntimeHPA, runtime *pb.RuntimeInspect) {
+	if runtime == nil {
+		return
+	}
+
+	for svc := range runtime.Services {
+		runtime.Services[svc].AutoscalerEnabled = patypes.RuntimeHPARuleCanceled
+	}
+
+	for _, rule := range hpaRules {
+		if rule.IsApplied == patypes.RuntimeHPARuleApplied {
+			runtime.Services[rule.ServiceName].AutoscalerEnabled = patypes.RuntimeHPARuleApplied
+		}
+	}
 }
 
 type ServiceOption func(*Service) *Service

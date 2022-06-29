@@ -16,8 +16,8 @@ package dbclient
 
 import (
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/erda-project/erda/internal/tools/orchestrator/components/horizontalpodscaler/types"
 	"github.com/erda-project/erda/internal/tools/orchestrator/spec"
 	"github.com/erda-project/erda/pkg/database/dbengine"
 )
@@ -49,12 +49,27 @@ type RuntimeHPA struct {
 	IsApplied              string `json:"is_applied"` // 表示规则是否已经应用，‘Y’ 表示已经应用，‘N’表示规则存在但未应用
 }
 
-const (
-	ErdaHPARuleApplied = "DELETING"
-)
-
 func (RuntimeHPA) TableName() string {
 	return "ps_v2_runtime_hpa"
+}
+
+type HPAEventInfo struct {
+	dbengine.BaseModel
+	RuleID      string `json:"rule_id" gorm:"size:36"`
+	RuntimeID   uint64 `json:"runtime_id" gorm:"not null"`
+	ServiceName string `json:"service_name"`
+	Event       string `json:"event" gorm:"type:text"`
+}
+
+type EventDetail struct {
+	LastTimestamp metav1.Time `json:"lastTimestamp,omitempty"`
+	Type          string      `json:"type,omitempty"`
+	Reason        string      `json:"reason,omitempty"`
+	Message       string      `json:"message,omitempty"`
+}
+
+func (HPAEventInfo) TableName() string {
+	return "ps_v2_runtime_hpa_events"
 }
 
 func (db *DBClient) CreateRuntimeHPA(runtimeHPA *RuntimeHPA) error {
@@ -116,24 +131,35 @@ func (db *DBClient) GetRuntimeHPARulesByRuntimeId(runtimeId uint64) ([]RuntimeHP
 	return runtimeHPAs, nil
 }
 
-func ConvertRuntimeHPARuleDTO(runtimeHPA RuntimeHPA) *types.RuntimeHPARuleDTO {
-	return &types.RuntimeHPARuleDTO{
-		RuleID:          runtimeHPA.RuleID,
-		OrgID:           runtimeHPA.OrgID,
-		OrgName:         runtimeHPA.OrgName,
-		ProjectID:       runtimeHPA.ProjectID,
-		ProjectName:     runtimeHPA.ProjectName,
-		ApplicationID:   runtimeHPA.ApplicationID,
-		ApplicationName: runtimeHPA.ApplicationName,
-		RuntimeID:       runtimeHPA.RuntimeID,
-		RuntimeName:     runtimeHPA.RuntimeName,
-		ClusterName:     runtimeHPA.ClusterName,
-		Workspace:       runtimeHPA.Workspace,
-		UserId:          runtimeHPA.UserID,
-		UserName:        runtimeHPA.UserName,
-		NickName:        runtimeHPA.NickName,
-		ServiceName:     runtimeHPA.ServiceName,
-		Rules:           runtimeHPA.Rules,
-		IsApplied:       runtimeHPA.IsApplied,
+func (db *DBClient) CreateHPAEventInfo(hpaEvent *HPAEventInfo) error {
+	return db.Save(hpaEvent).Error
+}
+
+// if not found, return (nil, error)
+func (db *DBClient) GetRuntimeHPAEventsByServices(runtimeId uint64, services []string) ([]HPAEventInfo, error) {
+	var hpaEvents []HPAEventInfo
+	if len(services) > 0 {
+		//  select * from ps_v2_runtime_hpa_events  where runtime_id = '143' AND service_name in ('go-demo','abc') order by updated_at desc limit 20;
+		if err := db.
+			Where("runtime_id = ? AND service_name in (?)", runtimeId, services).Order("updated_at desc").Limit(20).
+			Find(&hpaEvents).Error; err != nil {
+			return nil, errors.Wrapf(err, "failed to get runtime hpa events for runtimeId %+v for services: %v", runtimeId, services)
+		}
+	} else {
+		if err := db.
+			Where("runtime_id = ?", runtimeId).Order("updated_at desc").Limit(20).
+			Find(&hpaEvents).Error; err != nil {
+			return nil, errors.Wrapf(err, "failed to get runtime hpa events for runtimeId: %+v", runtimeId)
+		}
 	}
+	return hpaEvents, nil
+}
+
+func (db *DBClient) DeleteRuntimeHPAEventsByRuleId(ruleId string) error {
+	if err := db.
+		Where("rule_id = ?", ruleId).
+		Delete(&HPAEventInfo{}).Error; err != nil {
+		return errors.Wrapf(err, "failed to delete runtime hpa events for rule_id: %v", ruleId)
+	}
+	return nil
 }

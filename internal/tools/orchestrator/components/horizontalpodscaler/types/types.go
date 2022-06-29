@@ -70,4 +70,17 @@ const (
 	ErdaHPATriggerCronMetaDesiredReplicas string = "desiredReplicas"
 	ErdaHPATriggerCronMetaTimeZone        string = "timezone"
 	ErdaHPATriggerExternal                string = "external"
+
+	ErdaHPAObjectRuntimeIDLabel          string = "erdaRuntimeId"
+	ErdaHPAObjectRuleIDLabel             string = "erdaHPARuleId"
+	ErdaHPAObjectOrgIDLabel              string = "erdaHPAOrgId"
+	ErdaHPAObjectRuntimeServiceNameLabel string = "erdaRuntimeServiceName"
 )
+
+// HPA event details
+type EventDetail struct {
+	LastTimestamp metav1.Time `json:"lastTimestamp,omitempty"`
+	Type          string      `json:"type,omitempty"`
+	Reason        string      `json:"reason,omitempty"`
+	Message       string      `json:"message,omitempty"`
+}

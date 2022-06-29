@@ -51,6 +51,7 @@ import (
 	ds "github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/daemonset"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/deployment"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/event"
+	erdahpa "github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/hpa"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/ingress"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/instanceinfosync"
 	"github.com/erda-project/erda/internal/tools/orchestrator/scheduler/executor/plugins/k8s/job"
@@ -141,7 +142,7 @@ func init() {
 		// Synchronize instance status
 		dbclient := instanceinfo.New(dbengine.MustOpen())
 		bdl := bundle.New(bundle.WithCoreServices())
-		syncer := instanceinfosync.NewSyncer(clustername, k.addr, dbclient, bdl, k.pod, k.sts, k.deploy, k.event)
+		syncer := instanceinfosync.NewSyncer(clustername, k.addr, dbclient, bdl, k.pod, k.sts, k.deploy, k.event, k.hpa)
 
 		parentctx, cancelSyncInstanceinfo := context.WithCancel(context.Background())
 		k.instanceinfoSyncCancelFunc = cancelSyncInstanceinfo
@@ -198,6 +199,7 @@ type Kubernetes struct {
 	pvc          *persistentvolumeclaim.PersistentVolumeClaim
 	pv           *persistentvolume.PersistentVolume
 	scaledObject *scaledobject.ErdaScaledObject
+	hpa          *erdahpa.ErdaHPA
 	sts          *statefulset.StatefulSet
 	pod          *pod.Pod
 	secret       *secret.Secret
@@ -367,13 +369,14 @@ func New(name executortypes.Name, clusterName string, options map[string]string)
 	pvc := persistentvolumeclaim.New(persistentvolumeclaim.WithCompleteParams(addr, client))
 	pv := persistentvolume.New(persistentvolume.WithCompleteParams(addr, client))
 	scaleObj := scaledobject.New(scaledobject.WithCompleteParams(addr, client))
+	hpa := erdahpa.New(erdahpa.WithCompleteParams(addr, client))
 	sts := statefulset.New(statefulset.WithCompleteParams(addr, client))
 	k8spod := pod.New(pod.WithCompleteParams(addr, client))
 	k8ssecret := secret.New(secret.WithCompleteParams(addr, client))
 	k8sstorageclass := storageclass.New(storageclass.WithCompleteParams(addr, client))
 	sa := serviceaccount.New(serviceaccount.WithCompleteParams(addr, client))
 	nodeLabel := nodelabel.New(addr, client)
-	event := event.New(event.WithCompleteParams(addr, client))
+	event := event.New(event.WithCompleteParams(addr, client), event.WithKubernetesClient(k8sClient.ClientSet))
 	dbclient := instanceinfo.New(dbengine.MustOpen())
 
 	clusterInfo, err := clusterinfo.New(clusterName, clusterinfo.WithCompleteParams(addr, client), clusterinfo.WithDB(dbclient))
@@ -423,6 +426,7 @@ func New(name executortypes.Name, clusterName string, options map[string]string)
 		pvc:                      pvc,
 		pv:                       pv,
 		scaledObject:             scaleObj,
+		hpa:                      hpa,
 		sts:                      sts,
 		pod:                      k8spod,
 		secret:                   k8ssecret,
@@ -1296,7 +1300,7 @@ func (k *Kubernetes) applyErdaHPARules(sg apistructs.ServiceGroup) (interface{},
 		}
 
 		if scaledObject.RuleName == "" || scaledObject.RuleNameSpace == "" || scaledObject.ScaleTargetRef.Name == "" {
-			return sg, errors.Errorf("apply hpa for serviceGroup service %s failed: [name: %s] or [namespace: %s] or [targetRef.Name:%s] not set ", svc, scaledObject.RuleName, scaledObject.RuleNameSpace, scaledObject.ScaleTargetRef.Name)
+			return sg, errors.Errorf("apply hpa for serviceGroup service %s failed: [rule name: %s] or [namespace: %s] or [targetRef.Name:%s] not set ", svc, scaledObject.RuleName, scaledObject.RuleNameSpace, scaledObject.ScaleTargetRef.Name)
 		}
 
 		scaledObj := convertToKedaScaledObject(scaledObject)
@@ -1312,6 +1316,7 @@ func convertToKedaScaledObject(scaledObject hpapb.ScaledConfig) *kedav1alpha1.Sc
 	var stabilizationWindowSeconds int32 = 300
 	selectPolicy := autoscalingv2beta2.MaxPolicySelect
 
+	orgID := fmt.Sprintf("%d", scaledObject.OrgID)
 	triggers := make([]kedav1alpha1.ScaleTriggers, 0)
 	for _, trigger := range scaledObject.Triggers {
 		triggers = append(triggers, kedav1alpha1.ScaleTriggers{
@@ -1336,6 +1341,13 @@ func convertToKedaScaledObject(scaledObject hpapb.ScaledConfig) *kedav1alpha1.Sc
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      scaledObject.RuleName + "-" + strutil.ToLower(scaledObject.ScaleTargetRef.Kind) + "-" + scaledObject.ScaleTargetRef.Name,
 			Namespace: scaledObject.RuleNameSpace,
+			Labels: map[string]string{
+				hpatypes.ErdaHPAObjectRuntimeServiceNameLabel: scaledObject.ServiceName,
+				hpatypes.ErdaHPAObjectRuntimeIDLabel:          fmt.Sprintf("%d", scaledObject.RuntimeID),
+				hpatypes.ErdaHPAObjectRuleIDLabel:             scaledObject.RuleID,
+				hpatypes.ErdaHPAObjectOrgIDLabel:              orgID,
+				hpatypes.ErdaPALabelKey:                       "yes",
+			},
 		},
 		Spec: kedav1alpha1.ScaledObjectSpec{
 			ScaleTargetRef: &kedav1alpha1.ScaleTarget{

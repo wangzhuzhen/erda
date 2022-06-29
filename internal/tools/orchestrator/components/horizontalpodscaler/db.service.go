@@ -22,10 +22,12 @@ import (
 type DBService interface {
 	CreateErdaHPARule(req *dbclient.RuntimeHPA) error
 	UpdateErdaHPARule(req *dbclient.RuntimeHPA) error
-	GetErdaHRuntimePARulesByServices(id spec.RuntimeUniqueId, services []string) ([]dbclient.RuntimeHPA, error)
-	GetErdaHRuntimePARuleByRuleId(ruleId string) (dbclient.RuntimeHPA, error)
-	GetErdaHRuntimePARulesByRuntimeId(runtimeID uint64) ([]dbclient.RuntimeHPA, error)
-	DeleteErdaHRuntimePARulesByRuleId(ruleId string) error
+	GetErdaRuntimeHPARulesByServices(id spec.RuntimeUniqueId, services []string) ([]dbclient.RuntimeHPA, error)
+	GetErdaRuntimeHPARuleByRuleId(ruleId string) (dbclient.RuntimeHPA, error)
+	GetErdaRuntimeHPARulesByRuntimeId(runtimeID uint64) ([]dbclient.RuntimeHPA, error)
+	DeleteErdaRuntimeHPARulesByRuleId(ruleId string) error
 	GetRuntime(id uint64) (*dbclient.Runtime, error)
 	GetPreDeployment(uniqueId spec.RuntimeUniqueId) (*dbclient.PreDeployment, error)
+	GetErdaRuntimeHPAEventsByServices(runtimeId uint64, services []string) ([]dbclient.HPAEventInfo, error)
+	DeleteErdaRuntimeHPAEventsByRuleId(ruleId string) error
 }

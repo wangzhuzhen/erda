@@ -37,13 +37,13 @@ type Option func(*ErdaScaledObject)
 
 // New news a PersistentVolumeClaim
 func New(options ...Option) *ErdaScaledObject {
-	pvc := &ErdaScaledObject{}
+	scaledObj := &ErdaScaledObject{}
 
 	for _, op := range options {
-		op(pvc)
+		op(scaledObj)
 	}
 
-	return pvc
+	return scaledObj
 }
 
 // WithCompleteParams provides an Option

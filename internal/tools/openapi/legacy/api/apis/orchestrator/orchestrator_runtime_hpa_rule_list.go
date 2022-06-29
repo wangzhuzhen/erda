@@ -19,8 +19,8 @@ import (
 )
 
 var ORCHESTRATOR_RUNTIME_HPA_RULE_LIST = apis.ApiSpec{
-	Path:        "/api/runtimes/autoscaler/hpa-get?runtimeId=<runtimeId>&services=<services>",
-	BackendPath: "/api/runtimes/autoscaler/hpa-get?runtimeId=<runtimeId>&services=<services>",
+	Path:        "/api/runtimes/autoscaler/hpa-get",
+	BackendPath: "/api/runtimes/autoscaler/hpa-get",
 	Host:        "orchestrator.marathon.l4lb.thisdcos.directory:8081",
 	Scheme:      "http",
 	Method:      "GET",
