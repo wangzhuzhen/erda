@@ -1,0 +1,5 @@
+  我想创建一只小狗。狗的颜色从全局变量入参中获得，狗的名字从前置接口出参中获得。
+  出参：狗的名字; http status
+  断言: status=200; name 不为空
+  header 里增加 x-request-id=${{ random.uuid }}
+  param 里增加一个 hello=world

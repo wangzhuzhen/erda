@@ -203,3 +203,26 @@ func (b *Bundle) GetAutoTestSpaceStats(spaceIDs []string) (map[uint64]*apistruct
 
 	return listResp.Data, nil
 }
+
+// CreateTestSpaceWithReturn 创建测试空间并返回创建结果
+func (b *Bundle) CreateTestSpaceWithReturn(req *apistructs.AutoTestSpaceCreateRequest, userID string) (*apistructs.AutoTestSpace, error) {
+	host, err := b.urls.DOP()
+	if err != nil {
+		return nil, err
+	}
+	hc := b.hc
+
+	var createResp apistructs.AutoTestSpaceResponse
+	resp, err := hc.Post(host).Path("/api/autotests/spaces").
+		Header(httputil.UserHeader, userID).
+		JSONBody(req).
+		Do().JSON(&createResp)
+	if err != nil {
+		return nil, apierrors.ErrInvoke.InternalError(err)
+	}
+	if !resp.IsOK() || !createResp.Success {
+		return nil, toAPIError(resp.StatusCode(), createResp.Error)
+	}
+
+	return createResp.Data, nil
+}

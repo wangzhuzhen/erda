@@ -1,0 +1,131 @@
+$schema: 'http://json-schema.org/draft-07/schema#'
+type: object
+properties:
+  params:
+    type: array
+    description: List of HTTP query params
+    items:
+      type: object
+      properties:
+        key:
+          type: string
+          description: HTTP query param key
+        value:
+          type: string
+          description: HTTP query param value
+        desc:
+          type: string
+          description: HTTP query description
+      required:
+        - key
+        - value
+  headers:
+    type: array
+    description: List of HTTP headers
+    items:
+      type: object
+      properties:
+        key:
+          type: string
+          description: HTTP header key
+        value:
+          type: string
+          description: HTTP header  value
+        desc:
+          type: string
+          description: HTTP header description
+      required:
+        - key
+        - value
+        - desc
+  body:
+    type: object
+    description: HTTP Request Body
+    properties:
+      type:
+        type: string
+        description: HTTP Request Body type
+        enum:
+          - none
+          - ''
+          - text/plain
+          - application/json
+          - JSON(application/json)
+          - application/x-www-form-urlencoded
+      content:
+        type: string
+        description: HTTP Request Body content
+    required:
+      - type
+      - content
+  out_params:
+    type: array
+    description: List of HTTP output params
+    items:
+      type: object
+      properties:
+        key:
+          type: string
+          description: key of OutParam
+        source:
+          type: string
+          description: source of OutParam
+          enum:
+            - status
+            - 'body:json'
+            - 'body:json:jq'
+            - 'body:json:jsonpath'
+            - 'body:json:jackson'
+            - 'body:text'
+            - header
+        expression:
+          type: string
+          description: HTTP Response output param expression
+        matchIndex:
+          type: string
+          description: HTTP Response output param matchIndex
+      required:
+        - key
+        - source
+        - expression
+  asserts:
+    type: array
+    description: Assertion of the output parameters after API interface invocation
+    items:
+      type: object
+      properties:
+        arg:
+          type: string
+          description: >-
+            The parameters of the assertion can only be selected from the keys
+            of the output parameters above.
+        operator:
+          type: string
+          description: Expected result
+          enum:
+            - =
+            - '!='
+            - '>='
+            - <=
+            - '>'
+            - <
+            - contains
+            - not_contains
+            - belong
+            - not_belong
+            - empty
+            - not_empty
+            - exist
+            - not_exist
+        value:
+          type: string
+          description: Expected assertion result
+      required:
+        - arg
+        - operator
+required:
+  - params
+  - headers
+  - body
+  - out_params
+  - asserts

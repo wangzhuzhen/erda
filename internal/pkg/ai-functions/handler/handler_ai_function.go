@@ -28,6 +28,7 @@ import (
 	"github.com/erda-project/erda-infra/base/logs"
 	"github.com/erda-project/erda-proto-go/apps/aifunction/pb"
 	"github.com/erda-project/erda/internal/pkg/ai-functions/functions"
+	aiautotestscene "github.com/erda-project/erda/internal/pkg/ai-functions/functions/autotest-scene"
 	aitestcase "github.com/erda-project/erda/internal/pkg/ai-functions/functions/test-case"
 	"github.com/erda-project/erda/pkg/http/httpserver"
 	"github.com/erda-project/erda/pkg/strutil"
@@ -58,7 +59,11 @@ func (h *AIFunction) Apply(ctx context.Context, req *pb.ApplyRequest) (pbValue *
 		if err != nil {
 			return nil, HTTPError(err, http.StatusBadRequest)
 		}
-
+	case aiautotestscene.Name:
+		results, err = h.createAutoTestSceneForAPIsAndAutoTestSceneID(ctx, factory, req, h.OpenaiURL)
+		if err != nil {
+			return nil, HTTPError(err, http.StatusBadRequest)
+		}
 	default:
 		err := errors.Errorf("AI function %s not support for apply", req.GetFunctionName())
 		return nil, HTTPError(err, http.StatusBadRequest)
